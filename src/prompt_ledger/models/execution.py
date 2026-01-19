@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import desc, func
 
 from prompt_ledger.db.database import Base
 
@@ -90,9 +90,9 @@ class Execution(Base):
 
     # Indexes
     __table_args__ = (
-        Index("idx_exec_prompt_time", "prompt_id", "created_at.desc()"),
-        Index("idx_exec_version_time", "version_id", "created_at.desc()"),
-        Index("idx_exec_status_time", "status", "created_at.desc()"),
+        Index("idx_exec_prompt_time", "prompt_id", desc("created_at")),
+        Index("idx_exec_version_time", "version_id", desc("created_at")),
+        Index("idx_exec_status_time", "status", desc("created_at")),
         Index("idx_exec_corr", "correlation_id"),
         UniqueConstraint(
             "prompt_id",

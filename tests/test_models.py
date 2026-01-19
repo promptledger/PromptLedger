@@ -1,25 +1,26 @@
 """Tests for database models."""
 
-import pytest
 from uuid import uuid4
 
-from src.prompt_ledger.models.execution import Execution, ExecutionInput
-from src.prompt_ledger.models.model import Model
-from src.prompt_ledger.models.prompt import Prompt, PromptVersion, compute_checksum
+import pytest
+
+from prompt_ledger.models.execution import Execution, ExecutionInput
+from prompt_ledger.models.model import Model
+from prompt_ledger.models.prompt import Prompt, PromptVersion, compute_checksum
 
 
 class TestPromptModel:
     """Test prompt model functionality."""
-    
+
     async def test_compute_checksum(self):
         """Test checksum computation."""
         template = "Hello {{name}}"
         checksum1 = compute_checksum(template)
         checksum2 = compute_checksum(template)
-        
+
         assert checksum1 == checksum2
         assert len(checksum1) == 64  # SHA-256 hex length
-    
+
     async def test_prompt_creation(self, db_session):
         """Test creating a prompt."""
         prompt = Prompt(
@@ -29,18 +30,18 @@ class TestPromptModel:
         )
         db_session.add(prompt)
         await db_session.commit()
-        
+
         assert prompt.prompt_id is not None
         assert prompt.name == "test_prompt"
         assert prompt.created_at is not None
-    
+
     async def test_prompt_version_creation(self, db_session):
         """Test creating a prompt version."""
         # Create prompt first
         prompt = Prompt(name="test_prompt")
         db_session.add(prompt)
         await db_session.flush()
-        
+
         # Create version
         version = PromptVersion(
             prompt_id=prompt.prompt_id,
@@ -51,7 +52,7 @@ class TestPromptModel:
         )
         db_session.add(version)
         await db_session.commit()
-        
+
         assert version.version_id is not None
         assert version.version_number == 1
         assert version.status == "active"
@@ -59,22 +60,22 @@ class TestPromptModel:
 
 class TestExecutionModel:
     """Test execution model functionality."""
-    
+
     async def test_execution_creation(self, db_session):
         """Test creating an execution."""
         # Create related objects
         prompt = Prompt(name="test_prompt")
         db_session.add(prompt)
-        
+
         model = Model(
             provider="openai",
             model_name="gpt-4o-mini",
             max_tokens=128000,
         )
         db_session.add(model)
-        
+
         await db_session.flush()
-        
+
         version = PromptVersion(
             prompt_id=prompt.prompt_id,
             version_number=1,
@@ -83,7 +84,7 @@ class TestExecutionModel:
         )
         db_session.add(version)
         await db_session.flush()
-        
+
         # Create execution
         execution = Execution(
             prompt_id=prompt.prompt_id,
@@ -97,7 +98,7 @@ class TestExecutionModel:
         )
         db_session.add(execution)
         await db_session.flush()
-        
+
         # Create execution input
         execution_input = ExecutionInput(
             execution_id=execution.execution_id,
@@ -105,7 +106,7 @@ class TestExecutionModel:
         )
         db_session.add(execution_input)
         await db_session.commit()
-        
+
         assert execution.execution_id is not None
         assert execution.status == "succeeded"
         assert execution.execution_input is not None
@@ -114,7 +115,7 @@ class TestExecutionModel:
 
 class TestModel:
     """Test AI model configuration."""
-    
+
     async def test_model_creation(self, db_session):
         """Test creating a model configuration."""
         model = Model(
@@ -125,7 +126,7 @@ class TestModel:
         )
         db_session.add(model)
         await db_session.commit()
-        
+
         assert model.model_id is not None
         assert model.provider == "openai"
         assert model.model_name == "gpt-4o"
