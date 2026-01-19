@@ -1,8 +1,8 @@
 # Prompt Registry, Execution & Lineage Service
 
-**Final Design Specification (MVP)**  
-Audience: Engineering implementation team / coding assistant  
-Status: Approved for build  
+**Final Design Specification (MVP)**
+Audience: Engineering implementation team / coding assistant
+Status: Approved for build
 
 ---
 
@@ -10,16 +10,16 @@ Status: Approved for build
 
 This service provides a centralized, governed control plane for GenAI prompts with:
 
-- Prompt registry and content-based versioning  
-- Multi-provider execution (OpenAI first)  
-- Async-first production execution with Redis + Celery  
-- Full execution lineage and telemetry in Postgres  
+- Prompt registry and content-based versioning
+- Multi-provider execution (OpenAI first)
+- Async-first production execution with Redis + Celery
+- Full execution lineage and telemetry in Postgres
 - Deterministic reproducibility (prompt → version → execution)
 
 The MVP targets **engineering teams** and prioritizes:
 
-- Performance isolation  
-- Simple governance primitives  
+- Performance isolation
+- Simple governance primitives
 - Clean evolution path into a full enterprise platform
 
 Non-goals for MVP: RBAC, evaluation pipelines, dashboards, multi-tenancy, PII governance.
@@ -61,7 +61,7 @@ Worker Pool (Celery)
         OpenAI API
 ```
 
-Control plane: prompts, versions, models  
+Control plane: prompts, versions, models
 Data plane: executions (append-heavy, async)
 
 ---
@@ -86,17 +86,17 @@ Flow:
 7. Client polls `GET /v1/executions/{id}`
 
 Retries:
-- Max 3 retries  
-- Exponential backoff (5s, 30s, 2m)  
-- Retry on: timeouts, 429, 5xx  
+- Max 3 retries
+- Exponential backoff (5s, 30s, 2m)
+- Retry on: timeouts, 429, 5xx
 - No retry on: other 4xx
 
 ---
 
 ## 5. Rendering Rules
 
-- Engine: Jinja2  
-- Undefined variables: **error (fail fast)**  
+- Engine: Jinja2
+- Undefined variables: **error (fail fast)**
 - Store both:
   - `rendered_prompt` (TEXT)
   - `variables_json` (JSONB)
@@ -107,7 +107,7 @@ Rendering occurs **before enqueue** for reproducibility and simplicity.
 
 ## 6. Versioning Rules
 
-1. Compute `checksum_hash = sha256(template_source)`  
+1. Compute `checksum_hash = sha256(template_source)`
 2. If a version exists with same `(prompt_id, checksum_hash)`:
    - Reuse existing version (no new version number)
 3. If checksum is new:
@@ -116,8 +116,8 @@ Rendering occurs **before enqueue** for reproducibility and simplicity.
    - Update `prompts.active_version_id`
 
 Guarantees:
-- Same content = same version  
-- Version increments only on content change  
+- Same content = same version
+- Version increments only on content change
 - Full historical trace preserved
 
 ---
@@ -370,9 +370,9 @@ Queue payload:
 ```
 
 Worker steps:
-1. Load execution row  
-2. Mark `status=running`, set `started_at`  
-3. Call provider adapter  
+1. Load execution row
+2. Mark `status=running`, set `started_at`
+3. Call provider adapter
 4. Update:
    - `response_text`
    - tokens, latency
@@ -411,8 +411,8 @@ OpenAI adapter responsibilities:
 ## 12. Truncation & Limits
 
 Defaults:
-- Max rendered_prompt: 200 KB  
-- Max response_text: 500 KB  
+- Max rendered_prompt: 200 KB
+- Max response_text: 500 KB
 
 If exceeded:
 - Truncate
@@ -450,12 +450,12 @@ Reserved fields and tables already support:
 
 The system is complete when:
 
-- Prompts can be registered and versioned via API  
-- Active version resolution works  
-- Async submit + worker execution works  
-- Polling returns results  
-- Executions are fully traceable in Postgres  
-- Idempotency prevents duplicate executions  
+- Prompts can be registered and versioned via API
+- Active version resolution works
+- Async submit + worker execution works
+- Polling returns results
+- Executions are fully traceable in Postgres
+- Idempotency prevents duplicate executions
 - OpenAI adapter works end-to-end
 
 ---
@@ -464,10 +464,9 @@ The system is complete when:
 
 This service implements an **enterprise-grade Prompt Registry, Execution and Lineage Control Plane** with:
 
-- Deterministic versioning  
-- Provider-agnostic execution  
-- Async-first production design  
-- Full reproducibility and audit trail  
+- Deterministic versioning
+- Provider-agnostic execution
+- Async-first production design
+- Full reproducibility and audit trail
 
 Designed to evolve into a full GenAI governance platform without re-architecture.
-

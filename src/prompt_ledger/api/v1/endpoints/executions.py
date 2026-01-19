@@ -4,16 +4,16 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path
-from sqlalchemy.orm import selectinload
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from ...db.database import get_db
-from ...models.execution import Execution, ExecutionInput
-from ...models.model import Model
-from ...models.prompt import Prompt, PromptVersion
-from ...services.execution import ExecutionService
-from ...services.providers import ProviderAdapterFactory
+from prompt_ledger.db.database import get_db
+from prompt_ledger.models.execution import Execution, ExecutionInput
+from prompt_ledger.models.model import Model
+from prompt_ledger.models.prompt import Prompt, PromptVersion
+from prompt_ledger.services.execution import ExecutionService
+from prompt_ledger.services.providers import ProviderAdapterFactory
 
 router = APIRouter()
 
@@ -24,7 +24,7 @@ async def run_execution_sync(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Execute a prompt synchronously."""
-    
+
     service = ExecutionService(db)
     result = await service.execute_sync(execution_request)
     return result
@@ -36,7 +36,7 @@ async def submit_execution_async(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Submit a prompt for asynchronous execution."""
-    
+
     service = ExecutionService(db)
     result = await service.submit_async(execution_request)
     return result
@@ -48,12 +48,12 @@ async def get_execution(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get execution status and results."""
-    
+
     try:
         uuid_obj = UUID(execution_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid execution ID format")
-    
+
     result = await db.execute(
         select(Execution)
         .where(Execution.execution_id == uuid_obj)
@@ -62,14 +62,14 @@ async def get_execution(
             selectinload(Execution.prompt),
             selectinload(Execution.version),
             selectinload(Execution.model),
-            selectinload(Execution.execution_input)
+            selectinload(Execution.execution_input),
         )
     )
     execution = result.scalar_one_or_none()
-    
+
     if not execution:
         raise HTTPException(status_code=404, detail="Execution not found")
-    
+
     response = {
         "execution_id": str(execution.execution_id),
         "status": execution.status,
@@ -77,16 +77,18 @@ async def get_execution(
         "environment": execution.environment,
         "created_at": execution.created_at.isoformat(),
     }
-    
+
     # Include results if completed
     if execution.status in ["succeeded", "failed"]:
         response["response_text"] = execution.response_text
-        response["completed_at"] = execution.completed_at.isoformat() if execution.completed_at else None
-        
+        response["completed_at"] = (
+            execution.completed_at.isoformat() if execution.completed_at else None
+        )
+
         if execution.status == "failed":
             response["error_type"] = execution.error_type
             response["error_message"] = execution.error_message
-    
+
     # Include telemetry if available
     if execution.prompt_tokens is not None:
         response["telemetry"] = {
@@ -94,7 +96,7 @@ async def get_execution(
             "response_tokens": execution.response_tokens,
             "latency_ms": execution.latency_ms,
         }
-    
+
     return response
 
 
@@ -107,22 +109,22 @@ async def list_executions(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """List executions with optional filtering."""
-    
+
     query = select(Execution).order_by(Execution.created_at.desc())
-    
+
     # Apply filters
     if prompt_name:
         query = query.join(Prompt).where(Prompt.name == prompt_name)
-    
+
     if status:
         query = query.where(Execution.status == status)
-    
+
     # Apply pagination
     query = query.limit(limit).offset(offset)
-    
+
     result = await db.execute(query)
     executions = result.scalars().all()
-    
+
     return {
         "executions": [
             {
@@ -131,7 +133,9 @@ async def list_executions(
                 "status": exec.status,
                 "mode": exec.execution_mode,
                 "created_at": exec.created_at.isoformat(),
-                "completed_at": exec.completed_at.isoformat() if exec.completed_at else None,
+                "completed_at": exec.completed_at.isoformat()
+                if exec.completed_at
+                else None,
             }
             for exec in executions
         ],

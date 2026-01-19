@@ -17,7 +17,7 @@
 - Follow PEP 8 and project-specific formatting rules
 - Use `black` for code formatting, `isort` for imports
 - Maximum line length: 88 characters
-- Use type hints everywhere possible
+- Use type hints everywhere possible (Python 3.11+ features available)
 
 #### Documentation
 - All public functions and classes must have docstrings

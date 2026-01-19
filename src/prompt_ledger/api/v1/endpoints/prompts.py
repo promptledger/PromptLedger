@@ -4,12 +4,12 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...db.database import get_db
-from ...models.prompt import Prompt, PromptVersion, compute_checksum
-from ...settings import settings
+from prompt_ledger.db.database import get_db
+from prompt_ledger.models.prompt import Prompt, PromptVersion, compute_checksum
+from prompt_ledger.settings import settings
 
 router = APIRouter()
 
@@ -28,21 +28,21 @@ async def upsert_prompt(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Create or update a prompt."""
-    
+
     # Extract fields from request
     template_source = prompt_data.get("template_source", "")
     description = prompt_data.get("description")
     owner_team = prompt_data.get("owner_team")
     created_by = prompt_data.get("created_by")
     set_active = prompt_data.get("set_active", False)
-    
+
     # Compute checksum
     checksum = compute_checksum(template_source)
-    
+
     # Find or create prompt
     result = await db.execute(select(Prompt).where(Prompt.name == name))
     prompt = result.scalar_one_or_none()
-    
+
     if not prompt:
         # Create new prompt
         prompt = Prompt(
@@ -52,7 +52,7 @@ async def upsert_prompt(
         )
         db.add(prompt)
         await db.flush()
-    
+
     # Check if version already exists
     result = await db.execute(
         select(PromptVersion).where(
@@ -61,7 +61,7 @@ async def upsert_prompt(
         )
     )
     existing_version = result.scalar_one_or_none()
-    
+
     version_change = False
     if existing_version:
         version = existing_version
@@ -75,7 +75,7 @@ async def upsert_prompt(
         )
         max_version = result.scalar_one_or_none()
         next_version = (max_version or 0) + 1
-        
+
         # Create new version
         version = PromptVersion(
             prompt_id=prompt.prompt_id,
@@ -88,14 +88,14 @@ async def upsert_prompt(
         db.add(version)
         version_change = True
         await db.flush()
-    
+
     # Set as active version if requested
     if set_active:
         prompt.active_version_id = version.version_id
         version.status = "active"
-    
+
     await db.commit()
-    
+
     return {
         "prompt": {
             "prompt_id": str(prompt.prompt_id),
@@ -115,16 +115,14 @@ async def list_prompt_versions(
     db: AsyncSession = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     """List all versions of a prompt."""
-    
+
     # Find prompt
-    result = await db.execute(
-        select(Prompt).where(Prompt.name == name)
-    )
+    result = await db.execute(select(Prompt).where(Prompt.name == name))
     prompt = result.scalar_one_or_none()
-    
+
     if not prompt:
         raise HTTPException(status_code=404, detail="Prompt not found")
-    
+
     # Get versions
     result = await db.execute(
         select(PromptVersion)
@@ -132,7 +130,7 @@ async def list_prompt_versions(
         .order_by(PromptVersion.version_number.desc())
     )
     versions = result.scalars().all()
-    
+
     return [
         {
             "version_id": str(version.version_id),
@@ -152,17 +150,14 @@ async def get_prompt(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get prompt details."""
-    
+
     # Find prompt with active version
-    result = await db.execute(
-        select(Prompt)
-        .where(Prompt.name == name)
-    )
+    result = await db.execute(select(Prompt).where(Prompt.name == name))
     prompt = result.scalar_one_or_none()
-    
+
     if not prompt:
         raise HTTPException(status_code=404, detail="Prompt not found")
-    
+
     response = {
         "prompt_id": str(prompt.prompt_id),
         "name": prompt.name,
@@ -171,7 +166,7 @@ async def get_prompt(
         "created_at": prompt.created_at.isoformat(),
         "updated_at": prompt.updated_at.isoformat(),
     }
-    
+
     # Include active version if exists
     if prompt.active_version_id:
         result = await db.execute(
@@ -187,5 +182,5 @@ async def get_prompt(
                 "template_source": active_version.template_source,
                 "status": active_version.status,
             }
-    
+
     return response
