@@ -2,6 +2,7 @@
 
 **Last Updated:** 2026-01-19
 **Status:** Post-Initial Implementation - Verification & Completion Phase
+**Major Update:** Dual-Mode Prompt Management (Full + Code-Based Tracking) added to spec
 
 ---
 
@@ -9,12 +10,13 @@
 
 ### Current Environment
 - **OS:** Windows (win32)
-- **Python:** 3.9.13 ⚠️ *Spec requires 3.11+*
+- **Python (System):** 3.9.13 (Anaconda)
+- **Python (Virtual Env):** 3.11.2 ✅ *Meets spec requirement 3.11+*
 - **Node.js:** v22.12.0
 - **Docker:** 29.0.1
 - **Docker Compose:** v2.40.3-desktop.1
 - **Git:** Repository initialized, on master branch
-- **Virtual Environment:** Exists (.venv)
+- **Virtual Environment:** Exists (.venv) with Python 3.11.2
 - **Pre-commit Hooks:** Configured (.pre-commit-config.yaml)
 - **.env File:** ❌ Not found (needs creation from .env.example)
 
@@ -29,11 +31,9 @@
 ## 1. Configuration & Environment Setup
 
 ### 1.1 Critical Configuration Tasks
-- [ ] **CRITICAL: Upgrade Python to 3.11+**
-  - Current: 3.9.13
-  - Required: 3.11+ per spec (Section 2)
-  - Impact: Type hints, performance improvements
-  - Action: Install Python 3.11 or 3.12, recreate venv
+- [x] **CRITICAL: Upgrade Python to 3.11+**
+  - ✅ Virtual environment has Python 3.11.2
+  - Meets spec requirement (Section 2)
 
 - [ ] **Create .env file from .env.example**
   - Copy .env.example to .env
@@ -49,9 +49,11 @@
   - DEBUG mode setting
 
 ### 1.2 Development Environment Setup
-- [ ] **Install/Reinstall dependencies after Python upgrade**
+- [ ] **Verify dependencies are installed in virtual environment**
   ```bash
-  pip install -e ".[dev]"
+  .venv/Scripts/pip list
+  # Or reinstall if needed:
+  .venv/Scripts/pip install -e ".[dev]"
   ```
 
 - [ ] **Verify pre-commit hooks are working**
@@ -77,6 +79,7 @@
     - `execution_status` (queued, running, succeeded, failed, canceled)
     - `provider_name` (openai)
   - Verify all 5 tables created with correct columns
+  - **NEW: Check if `prompts.mode` field exists for dual-mode support**
   - Verify all indexes and constraints
 
 - [ ] **Run database migrations**
@@ -161,7 +164,137 @@
 
 ---
 
-## 4. Rendering Engine (Section 5)
+## 4. Code-Based Prompt Mode Implementation (NEW - Section 10 in Spec)
+
+### 4.1 Database Schema Updates
+- [ ] **Add `mode` field to prompts table**
+  - Create migration to add `mode` column (ENUM: 'full', 'tracking')
+  - Default value: 'full' for backward compatibility
+  - Update existing prompts to 'full' mode
+  - Add index on mode field for analytics queries
+
+- [ ] **Verify schema supports dual-mode**
+  - Confirm prompt_versions table works for both modes
+  - Confirm executions table works for both modes
+  - No separate tables needed (unified design)
+
+### 4.2 Core Code-Based APIs (Section 10)
+
+#### Register Code Prompts
+- [ ] **POST /v1/prompts/register-code**
+  - Accept array of prompts with name, template_source, template_hash
+  - For each prompt:
+    - Check if prompt exists by name
+    - Compute checksum from template_source
+    - If checksum differs: create new version, increment version_number
+    - If checksum same: return existing version
+    - Set mode='tracking'
+  - Return registration results with version info and change detection
+  - Write tests for:
+    - First-time registration
+    - Re-registration with no changes (no new version)
+    - Re-registration with changes (new version created)
+    - Bulk registration (multiple prompts)
+
+#### Execute Code Prompt
+- [ ] **POST /v1/prompts/{name}/execute**
+  - Accept variables, version (optional), model_name, mode
+  - Verify prompt exists and mode='tracking'
+  - Resolve version (use specified or latest)
+  - Execute prompt (sync or async based on mode parameter)
+  - Track execution in same executions table
+  - Write tests for:
+    - Sync execution
+    - Async execution
+    - Version pinning
+    - Error handling (prompt not found, wrong mode)
+
+#### Get Prompt History (Unified)
+- [ ] **GET /v1/prompts/{name}/history?mode={mode}**
+  - Return version history with execution counts
+  - Support both 'full' and 'tracking' modes
+  - Include version metadata (template_hash, created_at)
+  - Write tests for:
+    - Full mode history
+    - Tracking mode history
+    - Prompt not found
+
+#### Unified Analytics
+- [ ] **GET /v1/analytics/prompts?mode={all|full|tracking}**
+  - Aggregate execution stats by mode
+  - Return:
+    - Total executions
+    - Prompts by mode count
+    - Average latency by mode
+    - Token usage by mode
+  - Write tests for:
+    - All modes analytics
+    - Mode-specific filtering
+    - Empty data handling
+
+### 4.3 Client SDK Support (Code Examples)
+
+- [ ] **Create Python SDK examples**
+  - Full management mode example
+  - Code-based tracking mode example
+  - Migration between modes example
+  - Add to README.md
+
+- [ ] **Document prompt class pattern**
+  ```python
+  class Prompts:
+      WELCOME = "Hello {{name}}!"
+
+      @classmethod
+      def get_template(cls, name):
+          return getattr(cls, name)
+  ```
+
+### 4.4 Change Detection & Versioning
+
+- [ ] **Implement automatic version detection**
+  - Compare template_hash on registration
+  - Auto-increment version on content change
+  - Preserve version on re-registration with same content
+  - Log version changes for audit
+
+- [ ] **Test version detection edge cases**
+  - Whitespace-only changes (should create new version)
+  - Case changes in template (should create new version)
+  - Variable name changes (should create new version)
+  - Same content re-registration (should NOT create new version)
+
+### 4.5 Mode Management
+
+- [ ] **Implement mode validation**
+  - Cannot execute 'full' mode prompts via code-based endpoints
+  - Cannot execute 'tracking' mode prompts via traditional PUT
+  - Clear error messages for mode mismatches
+
+- [ ] **Add mode migration support (future)**
+  - Document migration path from tracking → full
+  - Document migration path from full → tracking
+  - Add helper endpoints if needed
+
+### 4.6 Integration Testing
+
+- [ ] **End-to-end code-based workflow test**
+  1. Register multiple code prompts
+  2. Execute each prompt (sync and async)
+  3. Verify version creation on content change
+  4. Verify no version creation on re-registration
+  5. Query analytics for tracking mode
+  6. Query prompt history for tracking mode
+
+- [ ] **Mixed mode testing**
+  - Create prompts in both full and tracking modes
+  - Execute prompts from both modes
+  - Verify unified analytics work correctly
+  - Verify mode isolation (no cross-contamination)
+
+---
+
+## 5. Rendering Engine (Section 5)
 
 - [ ] **Verify Jinja2 rendering implementation**
   - Variables are rendered before enqueue
@@ -175,9 +308,9 @@
 
 ---
 
-## 5. Worker Implementation (Section 10)
+## 6. Worker Implementation (Section 11)
 
-### 5.1 Celery Worker
+### 6.1 Celery Worker
 - [ ] **Verify worker task implementation**
   - Load execution row by ID
   - Update status to "running" + set started_at
@@ -197,7 +330,7 @@
   celery -A prompt_ledger.workers.celery_app worker --loglevel=info
   ```
 
-### 5.2 Queue Integration
+### 6.2 Queue Integration
 - [ ] **Verify Redis connection**
   - Worker connects to Redis
   - Tasks are enqueued correctly
@@ -205,9 +338,9 @@
 
 ---
 
-## 6. Provider Adapter (Section 11)
+## 7. Provider Adapter (Section 11)
 
-### 6.1 OpenAI Adapter
+### 7.1 OpenAI Adapter
 - [ ] **Verify OpenAI adapter implementation**
   - Implements ProviderAdapter interface
   - generate() method signature correct
@@ -239,7 +372,7 @@
 
 ---
 
-## 7. Truncation & Limits (Section 12)
+## 8. Truncation & Limits (Section 12)
 
 - [ ] **Verify truncation implementation**
   - Max rendered_prompt: 200 KB
@@ -252,9 +385,9 @@
 
 ---
 
-## 8. Testing
+## 9. Testing
 
-### 8.1 Existing Tests
+### 9.1 Existing Tests
 - [ ] **Review test_models.py**
   - Verify covers all model operations
   - Add missing test cases
@@ -263,7 +396,7 @@
   - Verify covers all prompt operations
   - Add missing test cases
 
-### 8.2 Missing Test Files
+### 9.2 Missing Test Files
 - [ ] **Create test_executions.py**
   - Test sync execution flow
   - Test async execution flow
@@ -290,13 +423,24 @@
   - Test parameter mapping
   - Mock OpenAI API responses
 
-### 8.3 Integration Tests
+- [ ] **Create test_code_based_prompts.py (NEW)**
+  - Test prompt registration with tracking mode
+  - Test version detection on content change
+  - Test no version creation on re-registration
+  - Test code-based execution endpoint
+  - Test mode validation (tracking vs full)
+  - Test unified analytics with both modes
+  - Test prompt history for tracking mode
+
+### 9.3 Integration Tests
 - [ ] **Create test_end_to_end.py**
   - Test full sync execution flow
   - Test full async execution flow
   - Test prompt versioning through execution
+  - **NEW: Test code-based prompt workflow**
+  - **NEW: Test mixed mode operations (full + tracking)**
 
-### 8.4 Run All Tests
+### 9.4 Run All Tests
 - [ ] **Execute test suite**
   ```bash
   pytest -v
@@ -305,7 +449,7 @@
 
 ---
 
-## 9. Observability (Section 13)
+## 10. Observability (Section 13)
 
 - [ ] **Verify logging implementation**
   - Uses structlog (already in requirements)
@@ -323,9 +467,9 @@
 
 ---
 
-## 10. End-to-End Verification (Section 15 - Definition of Done)
+## 11. End-to-End Verification (Section 15 - Definition of Done)
 
-### 10.1 MVP Completion Checklist
+### 11.1 MVP Completion Checklist - Full Management Mode
 - [ ] **Prompts can be registered and versioned via API**
   - Create a new prompt
   - Update prompt (new version)
@@ -361,25 +505,65 @@
   - Tokens counted
   - Latency recorded
 
-### 10.2 Full Stack Test
+### 11.2 MVP Completion Checklist - Code-Based Tracking Mode (NEW)
+
+- [ ] **Code prompts can be registered with automatic versioning**
+  - Register multiple prompts via POST /v1/prompts/register-code
+  - Verify version detection on first registration
+  - Update prompt content and re-register
+  - Verify new version created automatically
+
+- [ ] **Content change detection works correctly**
+  - Re-register unchanged prompt (no new version)
+  - Change template content (new version created)
+  - Verify checksum-based deduplication
+
+- [ ] **Code-based execution works**
+  - Execute tracking mode prompt (sync)
+  - Execute tracking mode prompt (async)
+  - Verify execution tracked in same executions table
+
+- [ ] **Mode isolation enforced**
+  - Cannot execute full mode prompt via code-based endpoint
+  - Cannot execute tracking mode prompt via traditional PUT
+  - Clear error messages for mode mismatches
+
+- [ ] **Unified analytics work across both modes**
+  - Query analytics with mode=all
+  - Verify both full and tracking mode stats
+  - Query mode-specific analytics
+
+- [ ] **Prompt history works for both modes**
+  - Get history for full mode prompt
+  - Get history for tracking mode prompt
+  - Verify version metadata and execution counts
+
+### 11.3 Full Stack Test
 - [ ] **Run complete stack with Docker Compose**
   ```bash
   docker-compose up -d
   docker-compose logs -f
   ```
 
-- [ ] **Execute complete workflow**
-  1. Create/register a prompt
+- [ ] **Execute complete workflow (Full Mode)**
+  1. Create/register a prompt via PUT
   2. Execute sync
   3. Execute async
   4. Poll until completion
   5. Verify results in database
 
+- [ ] **Execute complete workflow (Tracking Mode - NEW)**
+  1. Register code-based prompts
+  2. Execute via code-based endpoint (sync)
+  3. Execute via code-based endpoint (async)
+  4. Query unified analytics
+  5. Verify version auto-detection
+
 ---
 
-## 11. Documentation & Code Quality
+## 12. Documentation & Code Quality
 
-### 11.1 Code Quality
+### 12.1 Code Quality
 - [ ] **Run formatters**
   ```bash
   black src/ tests/
@@ -393,9 +577,9 @@
 
 - [ ] **Fix any linting issues**
 
-### 11.2 Documentation
+### 12.2 Documentation
 - [ ] **Review README.md**
-  - Update with any missing instructions
+  - ✅ Already updated with dual-mode documentation
   - Verify all examples work
   - Add troubleshooting section if needed
 
@@ -410,9 +594,9 @@
 
 ---
 
-## 12. Production Readiness (Future)
+## 13. Production Readiness (Future)
 
-### 12.1 Security
+### 13.1 Security
 - [ ] **API key management**
   - Document key rotation process
   - Consider adding key expiration
@@ -421,7 +605,7 @@
   - Document best practices for OPENAI_API_KEY
   - Consider integration with secret managers
 
-### 12.2 Deployment
+### 13.2 Deployment
 - [ ] **Create docker-compose.prod.yml**
   - Remove dev-specific settings
   - Add production logging
@@ -431,7 +615,7 @@
   - Update README with production guidance
   - Add monitoring recommendations
 
-### 12.3 Performance
+### 13.3 Performance
 - [ ] **Load testing**
   - Test with high concurrency
   - Test worker scaling
@@ -446,22 +630,26 @@
 ## Priority Levels
 
 ### P0 - Critical (Blocks MVP)
-1. Python version upgrade to 3.11+
+1. ~~Python version upgrade to 3.11+~~ ✅ Complete
 2. Create .env file with valid credentials
-3. Database migration verification
-4. All MVP Definition of Done items (Section 10.1)
+3. Database migration verification (including new `mode` field)
+4. All MVP Definition of Done items (Sections 11.1 & 11.2)
+5. **NEW: Code-based prompt mode implementation (Section 4)**
 
 ### P1 - High (Required for MVP)
-1. Complete test coverage for core flows
+1. Complete test coverage for core flows (both modes)
 2. Provider adapter verification with real API
 3. Worker retry logic verification
 4. API authentication verification
+5. **NEW: Code-based APIs implementation (register, execute, history, analytics)**
+6. **NEW: Mode validation and isolation**
 
 ### P2 - Medium (Important but not blocking)
-1. Integration tests
+1. Integration tests (including mixed-mode scenarios)
 2. Code quality checks (mypy, black, isort)
-3. Documentation updates
+3. Documentation updates (README already done)
 4. Logging verification
+5. **NEW: Client SDK examples for both modes**
 
 ### P3 - Low (Nice to have)
 1. Production deployment setup
@@ -472,14 +660,30 @@
 
 ## Notes
 
-- **Current Status:** The basic implementation appears complete based on file structure
-- **Next Steps:** Start with P0 items, particularly Python upgrade and environment setup
-- **Testing Strategy:** Verify each component works before moving to integration tests
+- **Current Status:** Basic implementation appears complete, **NEW dual-mode architecture added**
+- **Major Update:** Code-based prompt tracking mode added to support developer-centric workflows
+- **Next Steps:**
+  - ~~Python 3.11+ upgrade~~ ✅ Complete
+  - Create .env file with credentials
+  - Implement code-based prompt mode (Section 4)
+  - Verify existing implementation works
+- **Testing Strategy:**
+  - Verify legacy full-mode components first
+  - Implement and test code-based mode separately
+  - Test unified analytics and mixed-mode scenarios
+  - Verify mode isolation and validation
 - **Risk Areas:**
   - OpenAI API integration (requires valid key and credits)
   - Worker retry logic (needs thorough testing)
   - Versioning deduplication (critical for correctness)
+  - **NEW: Mode validation and isolation** (prevent cross-mode contamination)
+  - **NEW: Automatic version detection** (checksum comparison)
 - **Dependencies:** Cannot fully test without:
-  - Python 3.11+
+  - ~~Python 3.11+~~ ✅ Complete (venv has 3.11.2)
   - Valid .env file with OPENAI_API_KEY
   - Running Docker services
+- **Architecture Changes:**
+  - Unified table design supports both modes (no duplication)
+  - `prompts.mode` field distinguishes between 'full' and 'tracking'
+  - Same execution tracking for both modes
+  - 4 new API endpoints for code-based operations

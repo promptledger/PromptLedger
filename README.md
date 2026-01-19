@@ -4,11 +4,14 @@ A centralized, governed control plane for GenAI prompts with registry, execution
 
 ## Features
 
+- **Dual-Mode Prompt Management**: Full database management OR code-based tracking with automatic versioning
 - **Prompt Registry**: Content-based versioning with deduplication
 - **Multi-provider Execution**: OpenAI support with extensible adapter interface
 - **Async-first Design**: Redis + Celery for production workloads
 - **Full Lineage**: Complete execution tracking in Postgres
 - **Deterministic Reproducibility**: Prompt → Version → Execution traceability
+- **Git Integration**: Automatic version detection for code-based prompts
+- **Unified API**: Same interface regardless of prompt management approach
 
 ## Architecture
 
@@ -63,7 +66,7 @@ Worker Pool (Celery)
    ```bash
    # Run database migrations
    docker-compose exec api alembic upgrade head
-   
+
    # Seed initial models (optional)
    docker-compose exec api python -m prompt_ledger.scripts.seed_models
    ```
@@ -84,13 +87,13 @@ Worker Pool (Celery)
    ```bash
    # Start PostgreSQL and Redis
    docker-compose up -d postgres redis
-   
+
    # Run migrations
    alembic upgrade head
-   
+
    # Start API server
    uvicorn prompt_ledger.api.main:app --reload
-   
+
    # Start worker (in separate terminal)
    celery -A prompt_ledger.workers.celery_app worker --loglevel=info
    ```
@@ -168,6 +171,118 @@ curl -X GET "http://localhost:8000/v1/executions/{execution_id}" \
   -H "X-API-Key: dev-key-change-in-production"
 ```
 
+## Dual-Mode Usage Patterns
+
+Prompt Ledger supports two distinct approaches to prompt management:
+
+### Mode 1: Full Management (Database-First)
+
+**Best for**: Marketing teams, dynamic content, non-technical users
+
+```python
+from prompt_ledger import PromptLedger
+
+# Initialize in full management mode
+ledger = PromptLedger(mode="full")
+
+# Create and manage prompts via API
+ledger.create_prompt(
+    name="welcome_email",
+    template="Hello {{name}}, welcome to {{company}}!",
+    description="Welcome message for new users"
+)
+
+# Execute prompts
+result = ledger.execute("welcome_email", {
+    "name": "Sarah",
+    "company": "Acme Corp"
+})
+
+# Update prompts dynamically
+ledger.update_prompt("welcome_email",
+    "🎉 Hello {{name}}, welcome to {{company}}! We're excited to have you!")
+```
+
+### Mode 2: Code-Based Tracking (Git-First)
+
+**Best for**: Developer teams, version control, stable prompts
+
+```python
+# my_app/prompts.py
+class Prompts:
+    WELCOME = "Hello {{name}}, welcome to {{app}}!"
+    ORDER_CONFIRMATION = "Order {{order_id}} is confirmed!"
+    ERROR_MESSAGE = "Error: {{error}} - Please contact support."
+
+    @classmethod
+    def get_template(cls, name):
+        return getattr(cls, name)
+
+# my_app/main.py
+from prompt_ledger import PromptLedger
+from my_app.prompts import Prompts
+
+# Initialize in tracking mode
+ledger = PromptLedger(
+    mode="tracking_only",
+    code_registry=Prompts.get_template
+)
+
+# Register code prompts (detects changes automatically)
+response = ledger.register_code_prompts([
+    "WELCOME",
+    "ORDER_CONFIRMATION",
+    "ERROR_MESSAGE"
+])
+
+print(f"Registered {len(response['registered'])} prompts")
+for prompt in response['registered']:
+    print(f"  {prompt['name']}: v{prompt['version']} ({prompt['mode']})")
+
+# Execute with automatic tracking
+result = ledger.execute("WELCOME", {
+    "name": "John",
+    "app": "MyApp"
+})
+
+# Get unified analytics (works for both modes)
+analytics = ledger.get_analytics(mode="all")
+print(f"Total executions: {analytics['summary']['total_executions']}")
+print(f"Full mode: {analytics['by_mode']['full']['execution_count']}")
+print(f"Tracking mode: {analytics['by_mode']['tracking']['execution_count']}")
+
+# Get prompt history (works for both modes)
+history = ledger.get_prompt_history("WELCOME", mode="tracking")
+print(f"Current version: {history['current_version']}")
+for version in history['versions']:
+    print(f"v{version['version']}: {version['execution_count']} executions")
+```
+
+### Choosing the Right Mode
+
+| Factor | Full Management | Code-Based Tracking |
+|--------|----------------|-------------------|
+| **Team** | Mixed technical/non-technical | Developer-focused |
+| **Update Frequency** | High, dynamic changes | Low, stable templates |
+| **Version Control** | Database-managed | Git-based |
+| **Testing** | Runtime testing | Unit test friendly |
+| **Deployment** | No code changes needed | Code deployment required |
+| **Analytics** | Full prompt lifecycle | Usage tracking only |
+
+### Migration Between Modes
+
+```python
+# Start with tracking, migrate to full management
+ledger = PromptLedger(mode="tracking_only")
+# ... develop prompts in code ...
+
+# When ready for dynamic management:
+ledger.migrate_to_full_mode([
+    ("WELCOME", Prompts.WELCOME),
+    ("ORDER_CONFIRMATION", Prompts.ORDER_CONFIRMATION)
+])
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -182,15 +297,27 @@ curl -X GET "http://localhost:8000/v1/executions/{execution_id}" \
 
 ### Database Schema
 
-The service uses the following main tables:
+The service uses a unified table design that supports both modes:
 
-- `prompts` - Prompt definitions and metadata
+**Core Tables:**
+- `prompts` - Prompt definitions with mode indicator ('full' or 'tracking')
 - `prompt_versions` - Versioned prompt templates with checksums
+- `executions` - Unified execution tracking for both modes
 - `models` - AI model configurations
-- `executions` - Execution tracking and results
 - `execution_inputs` - Input variables for each execution
 
-See the [design specification](prompt_registry_execution_service_final_design_spec.md) for complete schema details.
+**Mode Differentiation:**
+- `prompts.mode` field distinguishes between 'full' and 'tracking' modes
+- Same tables serve both modes - no duplication needed
+- Unified analytics across all prompt types
+
+**Benefits:**
+- Single source of truth for all prompt data
+- Unified analytics and reporting
+- Simplified maintenance and migrations
+- Easy querying across modes
+
+See the [design specification](PromptLedger Spec.md) for complete schema details.
 
 ## Development
 
