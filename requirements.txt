@@ -1,0 +1,18 @@
+# Prompt Ledger Dependencies
+# This file is generated from pyproject.toml
+# Install with: pip install -r requirements.txt
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+psycopg[binary]>=3.1.0
+sqlalchemy[asyncio]>=2.0.0
+alembic>=1.12.0
+redis>=5.0.0
+celery>=5.3.0
+pydantic>=2.4.0
+pydantic-settings>=2.0.0
+jinja2>=3.1.0
+openai>=1.3.0
+python-multipart>=0.0.6
+httpx>=0.25.0
+structlog>=23.2.0
