@@ -10,7 +10,9 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -36,6 +38,11 @@ class Prompt(Base):
     name = Column(TEXT, nullable=False, unique=True)
     description = Column(TEXT)
     owner_team = Column(TEXT)
+    mode = Column(
+        Enum("full", "tracking", name="prompt_mode"),
+        nullable=False,
+        server_default="full",
+    )
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -46,12 +53,20 @@ class Prompt(Base):
         onupdate=func.now(),
     )
     active_version_id = Column(
-        PostgresUUID(as_uuid=True), ForeignKey("prompt_versions.version_id")
+        PostgresUUID(as_uuid=True),
+        ForeignKey(
+            "prompt_versions.version_id",
+            use_alter=True,
+            name="fk_prompt_active_version",
+        ),
     )
 
     # Relationships
     versions = relationship(
-        "PromptVersion", back_populates="prompt", cascade="all, delete-orphan"
+        "PromptVersion",
+        back_populates="prompt",
+        cascade="all, delete-orphan",
+        foreign_keys="PromptVersion.prompt_id",
     )
     executions = relationship("Execution", back_populates="prompt")
 
@@ -59,6 +74,9 @@ class Prompt(Base):
     active_version = relationship(
         "PromptVersion", foreign_keys=[active_version_id], post_update=True
     )
+
+    # Indexes for query optimization
+    __table_args__ = (Index("idx_prompts_mode", "mode"),)
 
 
 class PromptVersion(Base):
@@ -82,7 +100,7 @@ class PromptVersion(Base):
     )
 
     # Relationships
-    prompt = relationship("Prompt", back_populates="versions")
+    prompt = relationship("Prompt", back_populates="versions", foreign_keys=[prompt_id])
     executions = relationship("Execution", back_populates="version")
 
     # Constraints

@@ -167,3 +167,12 @@ cython_debug/
 *.sqlite
 logs/
 .DS_Store
+
+# Marketing materials (private)
+Marketing/
+
+# Personal development files
+.claude/settings.local.json
+myclaude.md
+TODO.md
+rules/

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.prompt import Prompt, PromptVersion, compute_checksum
+from prompt_ledger.services.prompt_service import PromptService
 from prompt_ledger.settings import settings
 
 router = APIRouter()
@@ -27,7 +28,11 @@ async def upsert_prompt(
     prompt_data: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Create or update a prompt."""
+    """Create or update a prompt in full management mode.
+
+    This endpoint manages prompts in 'full' mode. If you have a code-based
+    (tracking mode) prompt, use POST /v1/prompts/register-code instead.
+    """
 
     # Extract fields from request
     template_source = prompt_data.get("template_source", "")
@@ -43,12 +48,18 @@ async def upsert_prompt(
     result = await db.execute(select(Prompt).where(Prompt.name == name))
     prompt = result.scalar_one_or_none()
 
+    # Validate mode if prompt exists
+    if prompt:
+        service = PromptService(db)
+        await service.validate_mode(name, "full", "PUT operation")
+
     if not prompt:
-        # Create new prompt
+        # Create new prompt in full mode
         prompt = Prompt(
             name=name,
             description=description,
             owner_team=owner_team,
+            mode="full",  # Explicitly set to full mode
         )
         db.add(prompt)
         await db.flush()
