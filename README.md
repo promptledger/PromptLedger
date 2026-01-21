@@ -5,23 +5,27 @@ A centralized, governed control plane for GenAI prompts with registry, execution
 ## Features
 
 - **Dual-Mode Prompt Management**: Full database management OR code-based tracking with automatic versioning
+- **Workflow Execution Tracking**: OpenTelemetry-style spans for tracing multi-step agentic workflows
 - **Prompt Registry**: Content-based versioning with deduplication
 - **Multi-provider Execution**: OpenAI support with extensible adapter interface
 - **Async-first Design**: Redis + Celery for production workloads
-- **Full Lineage**: Complete execution tracking in Postgres
-- **Deterministic Reproducibility**: Prompt → Version → Execution traceability
+- **Full Lineage**: Complete execution tracking and parent-child relationships in Postgres
+- **Deterministic Reproducibility**: Prompt → Version → Execution → Span traceability
 - **Git Integration**: Automatic version detection for code-based prompts
 - **Unified API**: Same interface regardless of prompt management approach
+- **External Call Logging**: Track LLM calls made outside PromptLedger for complete visibility
 
 ## Architecture
 
 ```
-Client
+Client (Agentic Workflow)
   │
   ▼
 Prompt Registry & Execution API (FastAPI)
   │           │
-  │           ├── Registry ops → Postgres
+  │           ├── Registry ops → Postgres (prompts, versions)
+  │           │
+  │           ├── Span tracking → Postgres (traces, parent-child)
   │           │
   │           └── Submit execution → Redis (Celery)
   │
@@ -32,6 +36,9 @@ Worker Pool (Celery)
            │
            ▼
         OpenAI API
+           │
+           ▼
+  Results + Telemetry → Postgres (executions, spans)
 ```
 
 ## Quick Start
@@ -171,6 +178,143 @@ curl -X GET "http://localhost:8000/v1/executions/{execution_id}" \
   -H "X-API-Key: dev-key-change-in-production"
 ```
 
+## Workflow Execution Tracking
+
+PromptLedger provides OpenTelemetry-style workflow tracking to trace and correlate executions across multi-step agentic workflows. This enables debugging, cost attribution, and compliance auditing for complex LLM applications.
+
+### Core Concepts
+
+- **Trace**: A collection of spans representing a single workflow execution from start to finish
+- **Span**: A single operation within a trace (prompt execution, tool call, retrieval, guardrail check)
+- **trace_id**: Groups all spans in one workflow run
+- **parent_span_id**: Creates parent-child relationships for nested operations
+
+### Tracking a Multi-Step Workflow
+
+```python
+from prompt_ledger import PromptLedger
+import uuid
+
+ledger = PromptLedger()
+
+# Generate a trace_id for this workflow run
+trace_id = str(uuid.uuid4())
+
+# Step 1: RAG Retrieval (create root span)
+retrieval_result = ledger.execute(
+    "document_retrieval",
+    variables={"query": "What is our PTO policy?"},
+    trace_id=trace_id,
+    span_name="rag_retrieval",
+    span_kind="retrieval"
+)
+retrieval_span_id = retrieval_result["span_id"]
+
+# Step 2: Response Generation (child of retrieval)
+generation_result = ledger.execute(
+    "policy_response",
+    variables={
+        "query": "What is our PTO policy?",
+        "context": retrieval_result["output"]
+    },
+    trace_id=trace_id,
+    parent_span_id=retrieval_span_id,
+    span_name="response_generation",
+    span_kind="llm"
+)
+generation_span_id = generation_result["span_id"]
+
+# Step 3: Grounding Guardrail (child of generation)
+guardrail_result = ledger.execute(
+    "grounding_check",
+    variables={
+        "response": generation_result["output"],
+        "source_docs": retrieval_result["output"]
+    },
+    trace_id=trace_id,
+    parent_span_id=generation_span_id,
+    span_name="grounding_guardrail",
+    span_kind="guardrail"
+)
+
+# Get complete workflow trace
+trace = ledger.get_trace(trace_id)
+print(f"Total workflow duration: {trace['duration_ms']}ms")
+print(f"Total tokens used: {trace['total_tokens']}")
+print(f"Total cost: ${trace['total_cost']}")
+
+# Get execution tree
+tree = ledger.get_trace_tree(trace_id)
+for span in tree:
+    indent = "  " * span["depth"]
+    print(f"{indent}{span['name']}: {span['duration_ms']}ms")
+```
+
+### Logging External LLM Calls
+
+Track LLM calls made directly to providers (outside PromptLedger) for complete workflow visibility:
+
+```python
+# Your application makes a direct OpenAI call
+import openai
+response = openai.chat.completions.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "Analyze this data..."}]
+)
+
+# Log it to PromptLedger for tracking
+ledger.log_external_span(
+    trace_id=trace_id,
+    parent_span_id=parent_span_id,
+    name="direct_openai_analysis",
+    kind="llm",
+    input_data={"messages": [...]},
+    output_data={"response": response.choices[0].message.content},
+    model="gpt-4",
+    prompt_tokens=response.usage.prompt_tokens,
+    completion_tokens=response.usage.completion_tokens,
+    duration_ms=450
+)
+```
+
+### Workflow Analytics
+
+```bash
+# Get trace summary
+curl -X GET "http://localhost:8000/v1/traces/{trace_id}/summary" \
+  -H "X-API-Key: dev-key-change-in-production"
+
+# Get trace tree
+curl -X GET "http://localhost:8000/v1/traces/{trace_id}/tree" \
+  -H "X-API-Key: dev-key-change-in-production"
+
+# Get all spans in a trace
+curl -X GET "http://localhost:8000/v1/traces/{trace_id}/spans" \
+  -H "X-API-Key: dev-key-change-in-production"
+```
+
+### Use Cases
+
+**Debugging Failed Workflows**
+- Identify which step in a multi-step workflow caused a failure
+- See exact inputs and outputs at each step
+- Compare successful vs failed workflow runs
+
+**Cost Attribution**
+- Aggregate token costs across all steps in a workflow
+- Identify expensive operations for optimization
+- Track costs by workflow type or user
+
+**Compliance & Auditing**
+- Complete audit trail of all operations in a workflow
+- Prove that guardrails were executed before responses
+- Reconstruct decision chains for regulatory requirements
+
+**Performance Optimization**
+- Identify bottleneck steps in workflows
+- Measure end-to-end latency across workflow runs
+- Optimize parallel vs sequential execution patterns
+
 ## Dual-Mode Usage Patterns
 
 Prompt Ledger supports two distinct approaches to prompt management:
@@ -297,25 +441,33 @@ ledger.migrate_to_full_mode([
 
 ### Database Schema
 
-The service uses a unified table design that supports both modes:
+The service uses a unified table design that supports both dual-mode prompts and workflow tracking:
 
 **Core Tables:**
 - `prompts` - Prompt definitions with mode indicator ('full' or 'tracking')
 - `prompt_versions` - Versioned prompt templates with checksums
 - `executions` - Unified execution tracking for both modes
+- `spans` - Workflow execution tracking with trace_id and parent-child relationships
 - `models` - AI model configurations
 - `execution_inputs` - Input variables for each execution
+
+**Workflow Tracking:**
+- `spans.trace_id` groups all operations in a workflow run
+- `spans.parent_span_id` creates nested operation trees
+- `spans.execution_id` links spans to prompt executions (when applicable)
+- Supports tracking both PromptLedger executions and external LLM calls
 
 **Mode Differentiation:**
 - `prompts.mode` field distinguishes between 'full' and 'tracking' modes
 - Same tables serve both modes - no duplication needed
-- Unified analytics across all prompt types
+- Unified analytics across all prompt types and workflow patterns
 
 **Benefits:**
-- Single source of truth for all prompt data
-- Unified analytics and reporting
+- Single source of truth for all prompt data and workflow traces
+- Unified analytics and reporting across modes and workflows
+- OpenTelemetry-compatible design for industry-standard observability
 - Simplified maintenance and migrations
-- Easy querying across modes
+- Easy querying across modes and workflow patterns
 
 See the [design specification](PromptLedger Spec.md) for complete schema details.
 
@@ -392,10 +544,21 @@ MIT License - see LICENSE file for details.
 
 ## Roadmap
 
-- [ ] Multi-provider support (Anthropic, Google, etc.)
+### Recently Completed ✅
+- [x] Dual-mode prompt management (full vs tracking)
+- [x] Workflow execution tracking with OpenTelemetry-style spans
+- [x] Parent-child relationship tracking for nested operations
+- [x] External LLM call logging
+- [x] Unified analytics across modes and workflows
+
+### Planned Features
+- [ ] Multi-provider support (Anthropic, Google, Cohere, etc.)
+- [ ] OpenTelemetry export integration
 - [ ] RBAC and team-based access control
 - [ ] Evaluation and A/B testing framework
-- [ ] Cost tracking and budgeting
-- [ ] Prompt optimization suggestions
-- [ ] Web dashboard and analytics
+- [ ] Advanced cost tracking and budgeting dashboards
+- [ ] Prompt optimization suggestions based on execution data
+- [ ] Web dashboard and real-time analytics
 - [ ] Multi-tenancy support
+- [ ] Trace comparison and anomaly detection
+- [ ] Workflow templates and best practices library
