@@ -109,8 +109,13 @@ async def list_executions(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """List executions with optional filtering."""
+    from sqlalchemy.orm import selectinload
 
-    query = select(Execution).order_by(Execution.created_at.desc())
+    query = (
+        select(Execution)
+        .options(selectinload(Execution.prompt))
+        .order_by(Execution.created_at.desc())
+    )
 
     # Apply filters
     if prompt_name:

@@ -41,6 +41,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - API_KEY=dev-key-change-in-production
+      - TEST_DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/prompt_ledger_test
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,6 +49,8 @@ services:
         condition: service_healthy
     volumes:
       - ./src:/app/src
+      - ./tests:/app/tests
+      - ./alembic:/app/alembic
     command: uvicorn prompt_ledger.api.main:app --host 0.0.0.0 --port 8000 --reload
 
   # Celery Worker
@@ -65,7 +68,7 @@ services:
         condition: service_healthy
     volumes:
       - ./src:/app/src
-    command: celery -A prompt_ledger.workers.celery_app worker --loglevel=info
+    command: celery -A prompt_ledger.workers.celery_app worker --pool=solo --loglevel=info
 
   # Celery Beat (for scheduled tasks, if needed)
   beat:

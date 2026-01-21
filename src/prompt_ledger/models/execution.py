@@ -87,6 +87,8 @@ class Execution(Base):
     execution_input = relationship(
         "ExecutionInput", back_populates="execution", uselist=False
     )
+    # FR-001: Link to Span for workflow tracking
+    span = relationship("Span", back_populates="execution", uselist=False)
 
     # Indexes
     __table_args__ = (

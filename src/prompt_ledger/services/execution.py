@@ -4,7 +4,7 @@ import time
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
-from jinja2 import Environment, TemplateError, UndefinedError
+from jinja2 import Environment, StrictUndefined, TemplateError, UndefinedError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,7 +110,10 @@ class ExecutionService:
         # Queue for async execution
         from ..workers.celery_app import celery_app
 
-        celery_app.send_task("execute_prompt_task", args=[str(execution.execution_id)])
+        celery_app.send_task(
+            "prompt_ledger.workers.tasks.execute_prompt_task",
+            args=[str(execution.execution_id)],
+        )
 
         return {
             "execution_id": str(execution.execution_id),
@@ -224,16 +227,3 @@ class ExecutionService:
 
         await self.db.flush()
         return execution
-
-
-class StrictUndefined:
-    """Strict undefined variable handler for Jinja2."""
-
-    def __init__(self, name: str):
-        self.name = name
-
-    def __str__(self) -> str:
-        raise UndefinedError(f"'{self.name}' is undefined")
-
-    def __getattr__(self, name: str) -> "StrictUndefined":
-        raise UndefinedError(f"'{self.name}.{name}' is undefined")

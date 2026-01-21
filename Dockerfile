@@ -19,15 +19,20 @@ RUN useradd --create-home --shell /bin/bash app
 # Set work directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
+# Copy requirements first
 COPY pyproject.toml ./
-RUN pip install --upgrade pip && \
-    pip install -e .
+COPY README.md ./
 
-# Copy application code
+# Copy application code (needed for editable install)
 COPY src/ ./src/
+COPY tests/ ./tests/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
+COPY scripts/ ./scripts/
+
+# Install Python dependencies
+RUN pip install --upgrade pip && \
+    pip install -e ".[dev]"
 
 # Change ownership to app user
 RUN chown -R app:app /app
