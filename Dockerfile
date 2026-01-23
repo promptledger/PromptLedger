@@ -29,10 +29,14 @@ COPY tests/ ./tests/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 COPY scripts/ ./scripts/
+COPY entrypoint.sh ./
 
 # Install Python dependencies
 RUN pip install --upgrade pip && \
     pip install -e ".[dev]"
+
+# Make entrypoint script executable
+RUN chmod +x entrypoint.sh
 
 # Change ownership to app user
 RUN chown -R app:app /app
@@ -41,5 +45,5 @@ USER app
 # Expose port
 EXPOSE 8000
 
-# Default command
-CMD ["uvicorn", "prompt_ledger.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use entrypoint script for Railway compatibility
+ENTRYPOINT ["./entrypoint.sh"]
