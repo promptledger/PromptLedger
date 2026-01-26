@@ -7,8 +7,8 @@ As GenAI applications scale, prompts become scattered across code, notebooks,
 configs, and experiments—making them hard to govern, reproduce, and audit.
 PromptLedger provides a centralized control plane for managing prompt versions,
 executions, and lineage, giving teams observability and governance without
-slowing down development.
-📖 Background: [The Hidden Crisis of Prompt Sprawl](<https://medium.com/@martin_rodek/the-hidden-crisis-of-prompt-sprawl-and-how-to-fix-it-9b5e65cd10fc)
+slowing down development.   
+📖 Background: [The Hidden Crisis of Prompt Sprawl](<https://medium.com/@martin_rodek/the-hidden-crisis-of-prompt-sprawl-and-how-to-fix-it-9b5e65cd10fc>)
 
 
 ## Features
