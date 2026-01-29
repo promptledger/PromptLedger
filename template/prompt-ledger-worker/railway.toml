@@ -1,0 +1,8 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+startCommand = "celery -A prompt_ledger.workers.celery_app worker --pool=solo --loglevel=info"
