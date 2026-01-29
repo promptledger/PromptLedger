@@ -1,6 +1,16 @@
 # Prompt Ledger
 
-A centralized, governed control plane for GenAI prompts with registry, execution, and lineage tracking.
+PromptLedger is an open-source prompt registry and execution framework designed
+to solve **prompt sprawl** in GenAI and agentic AI systems.
+
+As GenAI applications scale, prompts become scattered across code, notebooks,
+configs, and experiments—making them hard to govern, reproduce, and audit.
+PromptLedger provides a centralized control plane for managing prompt versions,
+executions, and lineage, giving teams observability and governance without
+slowing down development.   
+
+📖 Background: [The Hidden Crisis of Prompt Sprawl](<https://medium.com/@martin_rodek/the-hidden-crisis-of-prompt-sprawl-and-how-to-fix-it-9b5e65cd10fc>)
+
 
 ## Features
 
