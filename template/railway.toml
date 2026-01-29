@@ -26,8 +26,8 @@ rootDir = "./sample-app"
 PROMPT_LEDGER_URL = "https://prompt-ledger-api-${{RAILWAY_PROJECT_ID}}.up.railway.app"
 PROMPT_LEDGER_API_KEY = "${{prompt-ledger-api.PROMPT_LEDGER_API_KEY}}"
 
-[[services.plugins]]
-name = "Postgres"
+[[plugins]]
+type = "postgresql"
 
-[[services.plugins]]
-name = "Redis"
+[[plugins]]
+type = "redis"
