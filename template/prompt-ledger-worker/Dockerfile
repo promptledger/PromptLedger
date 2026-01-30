@@ -12,10 +12,15 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy application code and all other necessary files
-COPY . .
+# Copy the shared source code and package definition
+COPY ../../pyproject.toml .
+COPY ../../src .
 
-# Install dependencies including the local prompt-ledger package
+# Install the local prompt-ledger package
+RUN pip install --no-cache-dir .
+
+# Copy the service-specific requirements and install them
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["celery", "-A", "prompt_ledger.workers.celery_app", "worker", "--pool=solo", "--loglevel=info"]
