@@ -98,14 +98,9 @@ def upgrade() -> None:
         sa.Column("version_number", sa.Integer(), nullable=False),
         sa.Column(
             "status",
-            sa.Enum(
-                "draft",
-                "active",
-                "deprecated",
-                name="prompt_version_status",
-                create_type=False,
-            ),
+            sa.Text(),
             nullable=False,
+            server_default="draft",
         ),
         sa.Column("template_source", sa.TEXT(), nullable=False),
         sa.Column("checksum_hash", sa.TEXT(), nullable=False),
@@ -135,7 +130,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "provider",
-            sa.Enum("openai", name="provider_name", create_type=False),
+            sa.TEXT(),
             nullable=False,
         ),
         sa.Column("model_name", sa.TEXT(), nullable=False),
@@ -166,22 +161,14 @@ def upgrade() -> None:
         sa.Column("environment", sa.TEXT(), nullable=False, default="dev"),
         sa.Column(
             "execution_mode",
-            sa.Enum("sync", "async", name="execution_mode", create_type=False),
+            sa.TEXT(),
             nullable=False,
         ),
         sa.Column(
             "status",
-            sa.Enum(
-                "queued",
-                "running",
-                "succeeded",
-                "failed",
-                "canceled",
-                name="execution_status",
-                create_type=False,
-            ),
+            sa.TEXT(),
             nullable=False,
-            default="queued",
+            server_default="queued",
         ),
         sa.Column("correlation_id", sa.TEXT(), nullable=True),
         sa.Column("idempotency_key", sa.TEXT(), nullable=True),
@@ -252,6 +239,20 @@ def upgrade() -> None:
         "prompt_versions",
         ["active_version_id"],
         ["version_id"],
+    )
+
+    # Convert TEXT columns to use enum types (workaround for async SQLAlchemy enum creation issues)
+    op.execute(
+        "ALTER TABLE prompt_versions ALTER COLUMN status TYPE prompt_version_status USING status::prompt_version_status"
+    )
+    op.execute(
+        "ALTER TABLE models ALTER COLUMN provider TYPE provider_name USING provider::provider_name"
+    )
+    op.execute(
+        "ALTER TABLE executions ALTER COLUMN execution_mode TYPE execution_mode USING execution_mode::execution_mode"
+    )
+    op.execute(
+        "ALTER TABLE executions ALTER COLUMN status TYPE execution_status USING status::execution_status"
     )
 
 
