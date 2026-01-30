@@ -242,17 +242,34 @@ def upgrade() -> None:
     )
 
     # Convert TEXT columns to use enum types (workaround for async SQLAlchemy enum creation issues)
+    # Must drop defaults first, then alter type, then re-add defaults with proper enum casting
+
+    # prompt_versions.status - has default
+    op.execute("ALTER TABLE prompt_versions ALTER COLUMN status DROP DEFAULT")
     op.execute(
         "ALTER TABLE prompt_versions ALTER COLUMN status TYPE prompt_version_status USING status::prompt_version_status"
     )
     op.execute(
+        "ALTER TABLE prompt_versions ALTER COLUMN status SET DEFAULT 'draft'::prompt_version_status"
+    )
+
+    # models.provider - no default
+    op.execute(
         "ALTER TABLE models ALTER COLUMN provider TYPE provider_name USING provider::provider_name"
     )
+
+    # executions.execution_mode - no default
     op.execute(
         "ALTER TABLE executions ALTER COLUMN execution_mode TYPE execution_mode USING execution_mode::execution_mode"
     )
+
+    # executions.status - has default
+    op.execute("ALTER TABLE executions ALTER COLUMN status DROP DEFAULT")
     op.execute(
         "ALTER TABLE executions ALTER COLUMN status TYPE execution_status USING status::execution_status"
+    )
+    op.execute(
+        "ALTER TABLE executions ALTER COLUMN status SET DEFAULT 'queued'::execution_status"
     )
 
 
