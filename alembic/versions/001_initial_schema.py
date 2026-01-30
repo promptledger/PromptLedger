@@ -18,15 +18,43 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Create enums if they don't exist
+    # Create enums if they don't exist (using DO blocks for idempotency)
     op.execute(
-        "CREATE TYPE IF NOT EXISTS prompt_version_status AS ENUM ('draft', 'active', 'deprecated')"
+        """
+        DO $$ BEGIN
+            CREATE TYPE prompt_version_status AS ENUM ('draft', 'active', 'deprecated');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """
     )
-    op.execute("CREATE TYPE IF NOT EXISTS execution_mode AS ENUM ('sync', 'async')")
     op.execute(
-        "CREATE TYPE IF NOT EXISTS execution_status AS ENUM ('queued', 'running', 'succeeded', 'failed', 'canceled')"
+        """
+        DO $$ BEGIN
+            CREATE TYPE execution_mode AS ENUM ('sync', 'async');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """
     )
-    op.execute("CREATE TYPE IF NOT EXISTS provider_name AS ENUM ('openai')")
+    op.execute(
+        """
+        DO $$ BEGIN
+            CREATE TYPE execution_status AS ENUM ('queued', 'running', 'succeeded', 'failed', 'canceled');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """
+    )
+    op.execute(
+        """
+        DO $$ BEGIN
+            CREATE TYPE provider_name AS ENUM ('openai');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """
+    )
 
     # Create prompts table
     op.create_table(
