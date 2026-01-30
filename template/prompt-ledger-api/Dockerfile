@@ -12,20 +12,20 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the shared source code and package definition
-COPY ../../pyproject.toml .
-COPY ../../src .
+# Copy the shared source code and package definition (paths relative to repo root)
+COPY pyproject.toml .
+COPY src ./src
 
 # Install the local prompt-ledger package
 RUN pip install --no-cache-dir .
 
 # Copy the service-specific requirements and install them
-COPY requirements.txt .
+COPY template/prompt-ledger-api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the alembic configuration
-COPY alembic.ini .
-COPY alembic ./alembic
+COPY template/prompt-ledger-api/alembic.ini .
+COPY template/prompt-ledger-api/alembic ./alembic
 
 # Expose port
 EXPOSE 8000
