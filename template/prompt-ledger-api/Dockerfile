@@ -12,12 +12,11 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Copy application code and all other necessary files
 COPY . .
+
+# Install dependencies including the local prompt-ledger package
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Expose port
 EXPOSE 8000
