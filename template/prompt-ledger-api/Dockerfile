@@ -23,9 +23,9 @@ RUN pip install --no-cache-dir .
 COPY template/prompt-ledger-api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the alembic configuration
-COPY template/prompt-ledger-api/alembic.ini .
-COPY template/prompt-ledger-api/alembic ./alembic
+# Copy the alembic configuration from repo root
+COPY alembic.ini .
+COPY alembic ./alembic
 
 # Expose port
 EXPOSE 8000

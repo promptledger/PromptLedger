@@ -1,6 +1,7 @@
 [build]
 builder = "dockerfile"
-dockerfilePath = "Dockerfile"
+dockerfilePath = "template/prompt-ledger-worker/Dockerfile"
+watchPaths = ["src/**", "template/prompt-ledger-worker/**", "pyproject.toml"]
 
 [deploy]
 restartPolicyType = "on_failure"

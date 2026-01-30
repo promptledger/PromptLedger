@@ -1,6 +1,7 @@
 [build]
 builder = "dockerfile"
-dockerfilePath = "Dockerfile"
+dockerfilePath = "template/prompt-ledger-api/Dockerfile"
+watchPaths = ["src/**", "template/prompt-ledger-api/**", "pyproject.toml", "alembic/**"]
 
 [deploy]
 healthcheckPath = "/health"
