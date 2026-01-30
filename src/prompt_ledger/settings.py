@@ -20,6 +20,17 @@ class Settings(BaseSettings):
         description="PostgreSQL database URL",
     )
 
+    @validator("database_url", pre=True)
+    def convert_database_url(cls, v: str) -> str:
+        """Convert standard postgres URL to asyncpg format for async operations."""
+        if v.startswith("postgres://"):
+            # Handle Railway's postgres:// format
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgresql://") and "+asyncpg" not in v:
+            # Handle postgresql:// without driver specified
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
     # Redis
     redis_url: str = Field(
         default="redis://localhost:6379/0", description="Redis URL for Celery broker"

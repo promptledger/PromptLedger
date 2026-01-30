@@ -21,7 +21,7 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 import psycopg  # noqa: F401 - Ensure psycopg3 is imported
 
 sync_database_url = settings.database_url.replace(
-    "postgresql+asyncpg://", "postgresql://"
+    "postgresql+asyncpg://", "postgresql+psycopg://"
 )
 sync_engine = create_engine(
     sync_database_url,
