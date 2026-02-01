@@ -15,10 +15,16 @@ PROMPT_LEDGER_API_KEY = os.getenv(
 @app.on_event("startup")
 async def startup_event():
     """Create a sample prompt on startup."""
+    print(f"Attempting to connect to PromptLedger API at: {PROMPT_LEDGER_URL}")
+    print(f"Using API key: {PROMPT_LEDGER_API_KEY[:10]}...")
+
     try:
         async with httpx.AsyncClient() as client:
+            url = f"{PROMPT_LEDGER_URL}/v1/prompts/user_welcome"
+            print(f"Creating prompt at: {url}")
+
             response = await client.put(
-                f"{PROMPT_LEDGER_URL}/v1/prompts/user_welcome",
+                url,
                 headers={"X-API-Key": PROMPT_LEDGER_API_KEY},
                 json={
                     "description": "Welcome message for new users",
@@ -29,14 +35,20 @@ async def startup_event():
                 },
                 timeout=10.0,
             )
+            print(f"Response status: {response.status_code}")
+            print(f"Response body: {response.text}")
+
             if response.status_code in (200, 201):
-                print("Prompt 'user_welcome' created or already exists.")
+                print("✓ Prompt 'user_welcome' created or already exists.")
             else:
                 print(
-                    f"Could not create prompt: {response.status_code} - {response.text}"
+                    f"✗ Could not create prompt: {response.status_code} - {response.text}"
                 )
     except Exception as e:
-        print(f"Error connecting to PromptLedger API: {e}")
+        print(f"✗ Error connecting to PromptLedger API: {type(e).__name__}: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
 
 
 @app.get("/")
