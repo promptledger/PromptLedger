@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.sql import func
 
@@ -17,7 +25,7 @@ class Model(Base):
     __tablename__ = "models"
 
     model_id = Column(PostgresUUID(as_uuid=True), primary_key=True, default=uuid4)
-    provider = Column(String(50), nullable=False)  # openai, anthropic, etc.
+    provider = Column(Enum("openai", name="provider_name"), nullable=False)
     model_name = Column(String(100), nullable=False)
     max_tokens = Column(Integer)
     supports_streaming = Column(Boolean, nullable=False, default=False)

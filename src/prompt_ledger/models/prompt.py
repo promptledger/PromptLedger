@@ -90,8 +90,10 @@ class PromptVersion(Base):
     )
     version_number = Column(Integer, nullable=False)
     status = Column(
-        String(20), nullable=False, default="draft"
-    )  # draft, active, deprecated
+        Enum("draft", "active", "deprecated", name="prompt_version_status"),
+        nullable=False,
+        server_default="draft",
+    )
     template_source = Column(TEXT, nullable=False)
     checksum_hash = Column(TEXT, nullable=False)
     created_by = Column(TEXT)

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -46,10 +47,21 @@ class Execution(Base):
 
     # Environment and mode
     environment = Column(String(50), nullable=False, default="dev")
-    execution_mode = Column(String(10), nullable=False)  # sync, async
+    execution_mode = Column(
+        Enum("sync", "async", name="execution_mode"), nullable=False
+    )
     status = Column(
-        String(20), nullable=False, default="queued"
-    )  # queued, running, succeeded, failed, canceled
+        Enum(
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "canceled",
+            name="execution_status",
+        ),
+        nullable=False,
+        server_default="queued",
+    )
 
     # Tracking
     correlation_id = Column(String(100))
