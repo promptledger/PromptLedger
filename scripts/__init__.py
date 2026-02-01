@@ -1,1 +1,1 @@
-"""Scripts for Prompt Ledger management."""
+"""Database seeding scripts."""

@@ -3,16 +3,16 @@
 import asyncio
 from uuid import uuid4
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.prompt_ledger.db.database import AsyncSessionLocal
-from src.prompt_ledger.models.model import Model
+from prompt_ledger.db.database import AsyncSessionLocal
+from prompt_ledger.models.model import Model
 
 
 async def seed_models():
     """Seed initial AI models."""
-    
+
     models = [
         {
             "provider": "openai",
@@ -39,7 +39,7 @@ async def seed_models():
             "supports_streaming": True,
         },
     ]
-    
+
     async with AsyncSessionLocal() as db:
         for model_data in models:
             # Check if model already exists
@@ -50,17 +50,18 @@ async def seed_models():
                 )
             )
             existing = result.scalar_one_or_none()
-            
+
             if not existing:
-                model = Model(
-                    model_id=uuid4(),
-                    **model_data
-                )
+                model = Model(model_id=uuid4(), **model_data)
                 db.add(model)
-                print(f"Added model: {model_data['provider']}/{model_data['model_name']}")
+                print(
+                    f"Added model: {model_data['provider']}/{model_data['model_name']}"
+                )
             else:
-                print(f"Model already exists: {model_data['provider']}/{model_data['model_name']}")
-        
+                print(
+                    f"Model already exists: {model_data['provider']}/{model_data['model_name']}"
+                )
+
         await db.commit()
         print("Model seeding completed.")
 
