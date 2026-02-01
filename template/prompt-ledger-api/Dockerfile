@@ -27,6 +27,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY alembic.ini .
 COPY alembic ./alembic
 
+# Copy scripts for seeding
+COPY scripts ./scripts
+
 # Copy the startup script
 COPY template/prompt-ledger-api/start.sh .
 RUN chmod +x start.sh
