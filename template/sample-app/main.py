@@ -50,7 +50,7 @@ async def send_welcome_message():
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{PROMPT_LEDGER_URL}/v1/executions:run",
+                f"{PROMPT_LEDGER_URL}/v1/executions/run",
                 headers={"X-API-Key": PROMPT_LEDGER_API_KEY},
                 json={
                     "prompt_name": "user_welcome",
