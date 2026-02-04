@@ -15,8 +15,26 @@ from .v1 import api as v1_api
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan events."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     # Startup
+    logger.info("Initializing database...")
     await init_db()
+
+    # Seed models
+    try:
+        logger.info("Seeding models...")
+        from scripts.seed_models import seed_models
+
+        await seed_models()
+        logger.info("Model seeding completed successfully")
+    except Exception as e:
+        logger.error(f"Failed to seed models: {e}", exc_info=True)
+        # Don't fail startup if seeding fails
+        pass
+
     yield
     # Shutdown
     pass
