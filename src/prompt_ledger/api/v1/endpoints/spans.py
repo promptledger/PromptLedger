@@ -143,7 +143,7 @@ def _build_trace_summary(
 
 
 @spans_router.post(
-    "/", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any]
+    "", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any]
 )
 async def ingest_span(
     payload: Dict[str, Any],
