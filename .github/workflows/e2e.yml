@@ -1,0 +1,31 @@
+name: E2E tests against Railway
+
+on:
+  workflow_dispatch:
+    inputs:
+      promptledger_url:
+        description: "PromptLedger Railway URL"
+        required: true
+        default: "https://prompt-ledger-api-production.up.railway.app"
+
+jobs:
+  e2e:
+    name: Run e2e suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and test deps
+        run: pip install -e ".[dev]"
+
+      - name: Run e2e tests
+        env:
+          PROMPTLEDGER_URL: ${{ inputs.promptledger_url }}
+          PROMPTLEDGER_API_KEY: ${{ secrets.PROMPTLEDGER_API_KEY }}
+        run: pytest tests/e2e/ -v --tb=short
