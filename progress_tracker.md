@@ -4,6 +4,55 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-17] - E2E test suite against live Railway deployment
+
+### Summary
+- New: `tests/e2e/conftest.py` — session-scoped `base_url`/`api_key` fixtures; skips cleanly if env vars not set; function-scoped `AsyncPromptLedgerClient` fixture
+- New: `tests/e2e/test_e2e.py` — 11 tests: health, auth rejection, no-key health, dry-run registration, live registration (new/unchanged/update), span ingestion, full 3-span trace workflow + summary, 404 handling, context helpers, analytics agents endpoint
+- New: `.github/workflows/e2e.yml` — `workflow_dispatch` trigger; Railway URL as input, API key from repo secret `PROMPTLEDGER_API_KEY`
+- **Result: 11/11 passed** against `https://prompt-ledger-api-production.up.railway.app`
+
+### Bugs found and fixed by running the suite
+- `RegistrationPayload.template` → `template_source` (SDK field name didn't match server schema)
+- Session-scoped async fixture caused `RuntimeError: Event loop is closed` on Windows — dropped to function scope
+- `PROMPTLEDGER_URL` / `PROMPTLEDGER_API_KEY` in env crashed Pydantic Settings (`extra_forbidden`) — added `extra = "ignore"` to Settings.Config
+
+### Decisions
+- Function-scoped client fixture: negligible overhead for e2e tests, avoids Windows asyncio event loop conflicts with session-scoped async fixtures
+- `pytest.skip()` (not error) when env vars absent — normal `pytest` runs are unaffected
+- No `--junit-xml` by default — can be added per-run with `--junit-xml=test-results/e2e.xml`
+
+### How to run
+```powershell
+$env:PROMPTLEDGER_URL = "https://prompt-ledger-api-production.up.railway.app"
+$env:PROMPTLEDGER_API_KEY = "your-key"
+pytest tests/e2e/ -v
+```
+
+---
+
+## [2026-03-17] - testcontainers: DB tests skip gracefully when Docker unavailable
+
+### Summary
+- Added `testcontainers[postgres]>=4.0.0` to dev dependencies
+- `postgres_container` session-scoped fixture in `tests/conftest.py` auto-starts Postgres 15 container when `TEST_DATABASE_URL` not set
+- Catches `DockerException` and calls `pytest.skip()` — converts 79 ERRORs to 85 SKIPs when Docker Desktop not running
+- `TEST_DATABASE_URL` env var still respected for CI / `make docker-up` workflow
+
+### Before / After
+- Before: 40 passed, 79 errors
+- After: 44 passed, 85 skipped, 0 errors
+
+---
+
+## [2026-03-17] - Agile user stories added to Epic 1 and Epic 2; CLAUDE.md standard
+
+### Summary
+- Added "As a [role], I want [capability], so that [benefit]" block to every story in `requirements/promptledger_epic_1_integration_enhancements.md` and `requirements/promptledger_epic_2_namespacing.md`
+- Updated `CLAUDE.md` to document the user story format as required for all future requirement files
+
+---
+
 ## [2026-03-17] - Story 1.8: Execution Telemetry Enhancement
 
 ### Summary
