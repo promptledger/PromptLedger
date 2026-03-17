@@ -4,6 +4,40 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-16] - Fix pricing.yaml bundling for Docker/Railway deployments
+
+### Summary
+- Moved `pricing.yaml` from repo root into `src/prompt_ledger/pricing.yaml` (now installed as package data)
+- Updated `_DEFAULT_PRICING_PATH` in `src/prompt_ledger/services/pricing.py` to `Path(__file__).parent.parent / "pricing.yaml"` — resolves correctly in both editable installs and `pip install .` / site-packages
+- Added `[tool.setuptools.package-data]` to `pyproject.toml` so `pricing.yaml` is included in the wheel
+- Commit: `60052ee`
+
+### Issues & Resolution
+- API crashed on Railway with `FileNotFoundError: /app/pricing.yaml` even after adding `COPY pricing.yaml .` to Dockerfiles — root cause: after `pip install .`, `pricing.py` is in site-packages and the 4-level `.parent` walk resolved to `/usr/local/lib/python3.11/`, not `/app/`
+- Fix: bundle the file inside the package so it travels with the install, and use a 2-level parent walk from `__file__`
+
+### Lessons Learned
+- Any file referenced at runtime by path must either be bundled as package data or mounted externally — never rely on the repo layout being present in a Docker container
+- `PRICING_YAML_PATH` env var override still works for operators who need a custom pricing file
+
+---
+
+## [2026-03-16] - Story 1.7: Span Ingestion API (Epic 1)
+
+### Summary
+- New: `src/prompt_ledger/api/v1/endpoints/spans.py` — `spans_router` (POST /v1/spans) and `traces_router` (GET /v1/traces/{id}, GET /v1/traces/{id}/summary)
+- Added `agent_id` and `prompt_name` columns to `spans` table (migration `eb819e059121`)
+- Added `GET /v1/analytics/agents` endpoint in `analytics.py` — cross-trace agent analytics grouped by `agent_id`
+- Registered spans/traces routers in `src/prompt_ledger/api/v1/__init__.py`
+- Tests: `tests/unit/test_span_ingestion.py` — 10 unit tests (tree assembly + summary calculation), all GREEN
+
+### Decisions
+- `_build_trace_tree()` and `_build_trace_summary()` are pure Python helpers tested independently — no DB needed for unit tests
+- `trace_summary` cost uses `PricingTable` — unknown models return `null` (not 0), consistent with Story 1.4 semantics
+- `agent_id` first-class column (indexed) for multi-agent analytics — not buried in `attributes` JSONB
+
+---
+
 ## [2026-03-16] - Story 1.1: Anthropic Provider Adapter (Epic 1)
 
 ### Summary
