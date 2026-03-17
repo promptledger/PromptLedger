@@ -4,6 +4,81 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-16] - Story 1.1: Anthropic Provider Adapter (Epic 1)
+
+### Summary
+- New: `AnthropicAdapter` in `src/prompt_ledger/services/providers.py` — implements `ProviderAdapter.generate()` using `AsyncAnthropic`
+- Registered under `"anthropic"` key in `ProviderAdapterFactory._adapters`
+- Added `anthropic_api_key` to `settings.py`; `ANTHROPIC_API_KEY=` added to `.env.example`
+- Added `anthropic>=0.40.0` to `pyproject.toml`, `template/prompt-ledger-api/requirements.txt`, `template/prompt-ledger-worker/requirements.txt`
+- Seeded `claude-haiku-4-5-20251001`, `claude-sonnet-4-6`, `claude-opus-4-6` in `scripts/seed_models.py`
+- Tests: `tests/unit/test_anthropic_provider.py` — 8 tests, all GREEN (mocked, no real API calls)
+
+### Decisions
+- `AsyncAnthropic` (not sync) to match the existing async FastAPI path
+- Missing `ANTHROPIC_API_KEY` raises `ValueError` at adapter construction (not at request time) — surfaces as a clear 400-able error before any API call is made
+- `AuthenticationError` → `RuntimeError("502: ...")`, `RateLimitError` → `RuntimeError("429: ...")` — HTTP status hint embedded in message for upstream handling
+- `max_tokens` defaults to 1024 if not supplied (Anthropic requires this field, OpenAI does not)
+- Token fields mapped: Anthropic `input_tokens`/`output_tokens` → shared schema `prompt_tokens`/`response_tokens`
+
+### Issues & Resolution
+- None
+
+### Next Steps
+- [ ] Story 1.7: Span Ingestion API (after Story 1.4 merges from parallel session)
+
+---
+
+## [2026-03-16] - Story 1.3: register-code Dry-Run and Change Detection (Epic 1)
+
+### Summary
+- Updated `src/prompt_ledger/services/prompt_service.py`: `register_code_prompts()` gains `dry_run: bool` param — reads DB, computes actions, skips all writes when `True`
+- Updated `src/prompt_ledger/api/v1/endpoints/code_prompts.py`: new response shape with `registered`/`updated`/`unchanged` integer counts + `details` array + `dry_run` bool
+- Each detail entry: `{"name", "action": "new"|"update"|"unchanged", "hash_changed": bool, "version", "change_detected", "previous_version"}`
+- Tests: `tests/integration/test_register_code_dry_run.py` — 7 tests (require Docker for DB)
+
+### Decisions
+- `details` array returned on both dry-run and live runs — enables CI diff reporting without changing the call
+- Breaking change to response shape: `{"registered": [...list...]}` → `{"registered": int, "updated": int, ...}` — old shape was only used internally; no external consumers yet
+
+### Issues & Resolution
+- None
+
+### Next Steps
+- [ ] Update `api_demo.ipynb` cells 2.1–2.3 to reflect new response shape
+
+---
+
+## [2026-03-16] - Story 1.0: API Key Auth + Operational Fixes
+
+### Summary
+- New: `src/prompt_ledger/api/dependencies.py` — `verify_api_key` using `secrets.compare_digest()`
+- Updated `src/prompt_ledger/api/v1/__init__.py`: v1 router declared with `dependencies=[Depends(verify_api_key)]` — blanket auth on all `/v1/*` endpoints
+- Removed no-op stub `verify_api_key` from `prompts.py`
+- Added `pool_pre_ping=True` + `pool_recycle=1800` to async SQLAlchemy engine (fixes intermittent 500s from Railway closing idle connections)
+- Updated `tests/conftest.py`: `client` fixture pins `settings.api_key = "test-key"`
+- Tests: `tests/test_auth.py` — 5 tests, GREEN
+- Fixed `examples/api_demo.ipynb`: removed `Content-Type: application/json` from `HEADERS` (was causing 500 on GET requests), added Celery worker warning to async execution cells
+- Fixed Railway worker service: Dockerfile path was blank — worker was running the API instead of Celery
+
+### Decisions
+- `secrets.compare_digest()` over `==` — prevents timing-based key enumeration
+- Auth applied at v1 router level, not per-endpoint — no endpoint can accidentally skip it
+- `/health` is inherently exempt (lives on root app, not under `/v1`)
+
+### Issues & Resolution
+- Worker logs empty: Railway `prompt-ledger-worker` service had blank Dockerfile path, causing it to run `start.sh` (the API) instead of the Celery worker command. Fixed by setting path to `template/prompt-ledger-worker/Dockerfile`
+- Analytics 500: caused by stale asyncpg connection (Railway closes idle connections), not Content-Type header. Fixed with `pool_pre_ping=True`
+
+### Lessons Learned
+- Railway does not automatically share env vars between services — each service needs its own `REDIS_URL` and `DATABASE_URL` references
+- Jupyter does not source `.env` files — env vars must be set in the shell before launching, or hardcoded in the config cell
+
+### Next Steps
+- [ ] Set `ANTHROPIC_API_KEY` in Railway `prompt-ledger-api` and `prompt-ledger-worker` env vars
+
+---
+
 ## [2026-03-16] - Story 1.4: Multi-Provider Cost Model (Epic 1)
 
 ### Summary
