@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = Field(default="", description="OpenAI API key")
 
+    # Anthropic
+    anthropic_api_key: str = Field(default="", description="Anthropic API key")
+
     # Security
     api_key: str = Field(
         default="dev-key-change-in-production",

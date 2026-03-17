@@ -38,6 +38,24 @@ async def seed_models():
             "max_tokens": 16384,
             "supports_streaming": True,
         },
+        {
+            "provider": "anthropic",
+            "model_name": "claude-haiku-4-5-20251001",
+            "max_tokens": 200000,
+            "supports_streaming": True,
+        },
+        {
+            "provider": "anthropic",
+            "model_name": "claude-sonnet-4-6",
+            "max_tokens": 200000,
+            "supports_streaming": True,
+        },
+        {
+            "provider": "anthropic",
+            "model_name": "claude-opus-4-6",
+            "max_tokens": 200000,
+            "supports_streaming": True,
+        },
     ]
 
     async with AsyncSessionLocal() as db:

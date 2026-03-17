@@ -4,6 +4,9 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
+from anthropic import AsyncAnthropic
+from anthropic import AuthenticationError as AnthropicAuthError
+from anthropic import RateLimitError as AnthropicRateLimitError
 from openai import AsyncOpenAI
 
 from prompt_ledger.settings import settings
@@ -82,11 +85,58 @@ class OpenAIAdapter(ProviderAdapter):
             raise RuntimeError(f"OpenAI API error: {e}")
 
 
+class AnthropicAdapter(ProviderAdapter):
+    """Anthropic provider adapter."""
+
+    def __init__(self, api_key: Optional[str] = None) -> None:
+        resolved_key = api_key or settings.anthropic_api_key
+        if not resolved_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY is required when provider is 'anthropic'"
+            )
+        self.client = AsyncAnthropic(api_key=resolved_key)
+
+    async def generate(
+        self, rendered_prompt: str, model_name: str, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate response using Anthropic Messages API."""
+        start_time = time.time()
+
+        request_params: Dict[str, Any] = {
+            "model": model_name,
+            "max_tokens": params.get("max_tokens", 1024),
+            "messages": [{"role": "user", "content": rendered_prompt}],
+        }
+
+        if "temperature" in params:
+            request_params["temperature"] = params["temperature"]
+
+        try:
+            response = await self.client.messages.create(**request_params)
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            return {
+                "response_text": response.content[0].text,
+                "prompt_tokens": response.usage.input_tokens,
+                "response_tokens": response.usage.output_tokens,
+                "latency_ms": latency_ms,
+                "provider_request_id": response.id,
+            }
+
+        except AnthropicAuthError as e:
+            raise RuntimeError(f"502: Anthropic authentication error: {e}")
+        except AnthropicRateLimitError as e:
+            raise RuntimeError(f"429: Anthropic rate limit exceeded: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Anthropic API error: {e}")
+
+
 class ProviderAdapterFactory:
     """Factory for creating provider adapters."""
 
     _adapters = {
         "openai": OpenAIAdapter,
+        "anthropic": AnthropicAdapter,
     }
 
     @classmethod
