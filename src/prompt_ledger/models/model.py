@@ -25,7 +25,7 @@ class Model(Base):
     __tablename__ = "models"
 
     model_id = Column(PostgresUUID(as_uuid=True), primary_key=True, default=uuid4)
-    provider = Column(Enum("openai", name="provider_name"), nullable=False)
+    provider = Column(Enum("openai", "anthropic", name="provider_name"), nullable=False)
     model_name = Column(String(100), nullable=False)
     max_tokens = Column(Integer)
     supports_streaming = Column(Boolean, nullable=False, default=False)

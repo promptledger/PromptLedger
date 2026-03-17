@@ -4,6 +4,25 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-17] - Hotfix: extend provider_name enum to include 'anthropic'
+
+### Summary
+- New migration `a1b2c3d4e5f6`: `ALTER TYPE provider_name ADD VALUE IF NOT EXISTS 'anthropic'`
+- Updated `Model.provider` ORM column to `Enum("openai", "anthropic", name="provider_name")`
+- Root cause: Story 1.1 added Anthropic seeding and the adapter but the migration to extend
+  the DB-level enum was missed — any `INSERT` with `provider='anthropic'` failed with a
+  Postgres constraint error, making the Anthropic adapter silently unusable in production
+
+### Decisions
+- `IF NOT EXISTS` makes the migration idempotent (safe to run twice)
+- Downgrade is a documented no-op — Postgres does not support removing enum values;
+  the extra value causes no harm if unused
+
+### Next Steps
+- [ ] Story 1.8: Execution telemetry enhancement (model_name + provider + total_cost in response)
+
+---
+
 ## [2026-03-17] - Story 1.2: Python Client SDK — promptledger-client v0.1.0 (Epic 1)
 
 ### Summary
