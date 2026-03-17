@@ -1,8 +1,5 @@
 """Pytest configuration and fixtures."""
 
-import asyncio
-
-# Test database URL - use postgres service name when in Docker
 import os
 from typing import AsyncGenerator
 
@@ -15,20 +12,45 @@ from prompt_ledger.api.main import app
 from prompt_ledger.db.database import Base, get_db
 from prompt_ledger.settings import settings
 
-TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:password@postgres:5432/prompt_ledger_test",
-)
+
+@pytest.fixture(scope="session")
+def postgres_container():
+    """Start a real Postgres container once per test session.
+
+    Falls back gracefully in two situations:
+    - TEST_DATABASE_URL is set (CI / make docker-up): use that URL directly.
+    - Docker is not reachable (Docker Desktop not running): skip DB tests with a
+      clear message rather than erroring with an obscure socket error.
+    """
+    if os.getenv("TEST_DATABASE_URL"):
+        yield None
+        return
+
+    try:
+        from testcontainers.postgres import PostgresContainer
+
+        pg = PostgresContainer("postgres:15", driver="asyncpg")
+        pg.start()
+    except Exception:
+        pytest.skip(
+            "Docker not available — start Docker Desktop or set TEST_DATABASE_URL "
+            "to run database tests"
+        )
+        return
+
+    yield pg
+    pg.stop()
 
 
 @pytest_asyncio.fixture(scope="function")
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
+async def db_session(postgres_container) -> AsyncGenerator[AsyncSession, None]:
     """Create a fresh database session for each test."""
-    # Create engine for this test
-    engine = create_async_engine(
-        TEST_DATABASE_URL,
-        echo=False,
-    )
+    if postgres_container is not None:
+        db_url = postgres_container.get_connection_url()
+    else:
+        db_url = os.environ["TEST_DATABASE_URL"]
+
+    engine = create_async_engine(db_url, echo=False)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
