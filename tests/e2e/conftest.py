@@ -35,9 +35,9 @@ def api_key() -> str:
     return key
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def client(base_url: str, api_key: str) -> AsyncPromptLedgerClient:
-    """Shared SDK client for the whole e2e session."""
+    """SDK client for each test — function-scoped avoids event loop conflicts."""
     async with AsyncPromptLedgerClient(
         base_url=base_url, api_key=api_key, timeout=30.0
     ) as c:

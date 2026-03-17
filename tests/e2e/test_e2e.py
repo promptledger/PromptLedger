@@ -70,7 +70,7 @@ async def test_register_code_dry_run(client: AsyncPromptLedgerClient):
     prompts = [
         RegistrationPayload(
             name=f"e2e.dry_run.{uuid.uuid4().hex[:8]}",
-            template="Summarise: {{text}}",
+            template_source="Summarise: {{text}}",
         )
     ]
     result = await client.register_code_prompts(prompts, dry_run=True)
@@ -83,7 +83,7 @@ async def test_register_code_dry_run(client: AsyncPromptLedgerClient):
 async def test_register_code_live(client: AsyncPromptLedgerClient):
     """Live registration writes a new prompt and returns action=new."""
     name = f"e2e.live.{uuid.uuid4().hex[:8]}"
-    prompts = [RegistrationPayload(name=name, template="Hello {{name}}")]
+    prompts = [RegistrationPayload(name=name, template_source="Hello {{name}}")]
 
     result = await client.register_code_prompts(prompts)
     assert result.dry_run is False
@@ -96,7 +96,7 @@ async def test_register_code_live(client: AsyncPromptLedgerClient):
     assert result2.details[0]["action"] == "unchanged"
 
     # Re-register modified template → update
-    prompts[0].template = "Hello {{name}} — updated"
+    prompts[0].template_source = "Hello {{name}} — updated"
     result3 = await client.register_code_prompts(prompts)
     assert result3.updated == 1
     assert result3.details[0]["action"] == "update"

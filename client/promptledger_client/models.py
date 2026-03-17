@@ -28,7 +28,7 @@ class RegistrationPayload(BaseModel):
     """A single prompt entry for POST /v1/prompts/register-code."""
 
     name: str
-    template: str
+    template_source: str
     mode: str = "tracking"
     description: Optional[str] = None
 

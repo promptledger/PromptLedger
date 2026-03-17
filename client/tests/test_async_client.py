@@ -136,8 +136,8 @@ class TestRegisterCodePrompts:
             client._http, "post", new=AsyncMock(return_value=_mock_response(200, body))
         ):
             prompts = [
-                RegistrationPayload(name="p.one", template="Hello {{name}}"),
-                RegistrationPayload(name="p.two", template="Goodbye {{name}}"),
+                RegistrationPayload(name="p.one", template_source="Hello {{name}}"),
+                RegistrationPayload(name="p.two", template_source="Goodbye {{name}}"),
             ]
             result = await client.register_code_prompts(prompts)
             assert result.registered == 2
@@ -155,7 +155,7 @@ class TestRegisterCodePrompts:
         post_mock = AsyncMock(return_value=_mock_response(200, body))
         with patch.object(client._http, "post", new=post_mock):
             await client.register_code_prompts(
-                [RegistrationPayload(name="p.one", template="t")],
+                [RegistrationPayload(name="p.one", template_source="t")],
                 dry_run=True,
             )
         _, kwargs = post_mock.call_args
@@ -169,7 +169,7 @@ class TestRegisterCodePrompts:
         ):
             with pytest.raises(AuthError):
                 await client.register_code_prompts(
-                    [RegistrationPayload(name="p", template="t")]
+                    [RegistrationPayload(name="p", template_source="t")]
                 )
 
 
