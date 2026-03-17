@@ -4,6 +4,35 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-17] - Story 1.2: Python Client SDK — promptledger-client v0.1.0 (Epic 1)
+
+### Summary
+- New package at `client/` — `pip install promptledger-client`
+- `promptledger_client/exceptions.py` — `PromptLedgerError`, `AuthError`, `NotFoundError`
+- `promptledger_client/models.py` — `SpanPayload`, `RegistrationPayload`, `RegisterResult`, `TraceSummary` (Pydantic)
+- `promptledger_client/context.py` — `start_trace()`, `current_trace_id()`, `current_parent_span_id()`, `set_parent_span_id()`
+- `promptledger_client/async_client.py` — `AsyncPromptLedgerClient`: `health()`, `log_span()`, `register_code_prompts()`, `get_trace_summary()`
+- `promptledger_client/client.py` — `PromptLedgerClient` (sync wrapper via `asyncio.run()`)
+- `tests/test_async_client.py` — 13 tests; `tests/test_context.py` — 8 tests (21 total, all GREEN)
+- `.github/workflows/publish-client.yml` — publishes to PyPI on `client-v*` tags via `twine`
+- Commit: `db70f17`
+
+### Decisions
+- `AsyncPromptLedgerClient` is the real implementation; `PromptLedgerClient` is a thin sync wrapper — no duplicated logic
+- Tests mock `httpx.AsyncClient` methods directly via `unittest.mock` — no extra test dependencies (`respx` not needed)
+- `SpanPayload.model_dump(exclude_none=True)` ensures only set fields are sent — server doesn't receive null-padded bodies
+- Context isolation test (`test_trace_id_does_not_leak_into_sibling_task`) creates task_b before task_a sets the contextvar — proves isolation without timing games
+- PyPI publish uses `PYPI_TOKEN` secret + `twine check` gate before upload
+
+### Issues & Resolution
+- black/isort reformatted 3 files on first commit — re-staged and committed clean
+
+### Next Steps
+- [ ] Tag `client-v0.1.0` and publish to PyPI (after Epic 1 fully validated on Railway)
+- [ ] Story 1.6: Integration Guide docs (parallel session)
+
+---
+
 ## [2026-03-17] - Story 1.6: Code-Based Tracking Integration Guide (Epic 1)
 
 ### Summary
