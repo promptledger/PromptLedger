@@ -131,6 +131,19 @@ Feature requests and functional requirements live in `requirements/`. Each requi
 
 **When adding a new requirement:** create `requirements/FR-NNN-title.md` and reference it in CLAUDE.md above.
 
+**Story format standard:** Every story in every requirement file must include an agile user story block immediately after the story heading, before the Goal line:
+
+```markdown
+**User Story:**
+> As a **[role]**, I want [capability], so that [benefit].
+```
+
+- **role** — the specific persona who benefits (e.g. "PromptLedger operator", "Python developer integrating PromptLedger", "CI/CD pipeline")
+- **capability** — what they want the system to do, in concrete terms
+- **benefit** — the outcome they care about, not a restatement of the capability
+
+Never write vague roles like "user" or "developer" without qualification. The role should identify *which* type of user and in *what context*.
+
 ## Configuration
 
 **Required `.env` variables:**

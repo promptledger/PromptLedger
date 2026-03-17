@@ -39,6 +39,9 @@ integrating against non-OpenAI providers face:
 
 ### Story 1.0 — API Key Authentication (Prerequisite)
 
+**User Story:**
+> As a **PromptLedger operator**, I want all API endpoints to require a valid `X-API-Key` header, so that unauthorized clients cannot read or modify prompts, executions, or traces in my deployment.
+
 **Goal:** Replace the current stub `verify_api_key` with real middleware that enforces
 `X-API-Key` authentication on all endpoints before anything is deployed to Railway.
 
@@ -72,6 +75,9 @@ This prevents timing-based key enumeration attacks.
 ---
 
 ### Story 1.1 — Anthropic Provider for Mode 1 Execution
+
+**User Story:**
+> As a **developer using Claude**, I want to execute prompts via `provider: "anthropic"` in the execution API, so that I can use PromptLedger's Mode 1 execution and lineage tracking without being forced onto OpenAI.
 
 **Goal:** `/v1/executions:run` and `/v1/executions:submit` accept `provider: "anthropic"` and
 route to the Anthropic Messages API using a caller-supplied `ANTHROPIC_API_KEY`.
@@ -134,6 +140,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 ---
 
 ### Story 1.2 — Official Python Client SDK (`promptledger-client`)
+
+**User Story:**
+> As a **Python developer integrating PromptLedger**, I want a pip-installable `promptledger-client` package with async and sync clients, so that I can log spans, register prompts, and propagate trace IDs without writing boilerplate httpx code in every project.
 
 **Goal:** Publish a pip-installable `promptledger-client` package that eliminates boilerplate
 in every consuming project. Must support both sync and async usage.
@@ -211,6 +220,9 @@ set_parent_span_id(span_id: str) -> None
 
 ### Story 1.3 — `register-code` Dry-Run and Change Detection
 
+**User Story:**
+> As a **CI/CD pipeline**, I want to call `register-code` with `dry_run: true` and get back a per-prompt action report without writing to the database, so that I can validate prompt changes in a pull request without side effects.
+
 **Goal:** `POST /v1/prompts/register-code` gains a `dry_run` flag and returns a per-prompt
 `action` field indicating what would happen (or did happen).
 
@@ -254,6 +266,9 @@ set_parent_span_id(span_id: str) -> None
 ---
 
 ### Story 1.4 — Multi-Provider Cost Model
+
+**User Story:**
+> As a **PromptLedger operator**, I want `total_cost` in trace summaries and analytics to reflect accurate Anthropic and OpenAI pricing, so that I can track LLM spend across providers without building my own cost calculation.
 
 **Goal:** `total_cost` in trace summaries and analytics is calculated correctly for both
 OpenAI and Anthropic models. Cost model is table-driven and updatable without code changes.
@@ -307,6 +322,9 @@ calculation logic.
 ---
 
 ### Story 1.7 — Span Ingestion API (`/v1/spans` and `/v1/traces`)
+
+**User Story:**
+> As a **Mode 2 client application**, I want to POST spans to `/v1/spans` with agent identity and prompt linkage, so that PromptLedger can track the LLM calls I make directly and power cost analytics and multi-agent trace trees.
 
 **Goal:** Give Mode 2 clients an HTTP endpoint to report the LLM calls they make directly,
 so PromptLedger can record execution telemetry, correlate multi-step traces, and power
@@ -509,6 +527,9 @@ CREATE INDEX idx_span_prompt_name ON spans(prompt_name);
 ---
 
 ### Story 1.6 — Code-Based Tracking Integration Guide (Documentation)
+
+**User Story:**
+> As a **developer evaluating PromptLedger for a code-first Anthropic project**, I want a complete Mode 2 integration guide with contextvars patterns, guardrail span examples, and CI dry-run recipes, so that I can integrate PromptLedger without reading source code or reverse-engineering other projects' implementations.
 
 **Goal:** Replace the one-paragraph Mode 2 section in `INTEGRATION_GUIDE.md` with a full
 worked example targeting non-OpenAI, code-first teams. This is a documentation-only story.

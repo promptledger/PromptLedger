@@ -64,6 +64,9 @@ Redis, API service). This provides isolation at the cost of operational overhead
 
 ### Story 2.1 — Projects and API Keys Model
 
+**User Story:**
+> As a **PromptLedger operator running a shared instance**, I want each consuming project to have its own database-backed API key, so that I can isolate access per project and revoke individual keys without redeploying the service.
+
 **Goal:** Introduce the `projects` and `api_keys` database tables and seed the existing
 `API_KEY` env var as the default project's key.
 
@@ -109,6 +112,9 @@ CREATE TABLE api_keys (
 
 ### Story 2.2 — Scope Prompts to Project
 
+**User Story:**
+> As a **developer on a shared PromptLedger instance**, I want my prompts to live in a separate namespace from other projects, so that two teams can register prompts with the same name without overwriting each other.
+
 **Goal:** Prompt names are unique within a project, not globally. Two projects can register
 `extraction.paper` independently.
 
@@ -143,6 +149,9 @@ ALTER TABLE prompts ADD CONSTRAINT uq_project_prompt_name UNIQUE (project_id, na
 
 ### Story 2.3 — Scope Spans and Executions to Project
 
+**User Story:**
+> As a **PromptLedger operator**, I want traces, spans, and analytics to be isolated per project, so that Project A cannot see Project B's execution data or LLM costs.
+
 **Goal:** Traces, spans, and executions are isolated per project.
 
 **Schema (migration 3 of 3):**
@@ -173,6 +182,9 @@ CREATE INDEX idx_span_project ON spans(project_id);
 ---
 
 ### Story 2.4 — Admin API for Project and Key Management
+
+**User Story:**
+> As a **PromptLedger operator**, I want admin endpoints to create named projects and issue scoped API keys, so that I can onboard new consuming teams without manual database changes.
 
 **Goal:** An admin endpoint to create named projects and issue scoped API keys.
 
