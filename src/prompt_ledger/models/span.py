@@ -57,6 +57,12 @@ class Span(Base):
     output_data = Column(JSONB, nullable=True)  # Output from this operation
     attributes = Column(JSONB, nullable=True)  # Arbitrary metadata
 
+    # Agent identity — first-class field for multi-agent workflow analytics
+    agent_id = Column(String(100), nullable=True, index=True)
+
+    # Prompt name linkage for Mode 2 spans (no execution_id to link back to)
+    prompt_name = Column(String(200), nullable=True, index=True)
+
     # LLM-specific fields (only populated for LLM spans)
     model = Column(String(100), nullable=True)
     prompt_tokens = Column(Integer, nullable=True)

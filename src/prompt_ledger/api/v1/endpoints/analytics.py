@@ -10,6 +10,7 @@ from prompt_ledger.db.database import get_db
 from prompt_ledger.models.execution import Execution
 from prompt_ledger.models.model import Model
 from prompt_ledger.models.prompt import Prompt
+from prompt_ledger.models.span import Span
 from prompt_ledger.services.pricing import PricingTable
 
 router = APIRouter()
@@ -197,3 +198,52 @@ async def get_prompts_analytics(
             "total_response_tokens": stats.total_response_tokens or 0,
             "total_cost": total_cost,
         }
+
+
+@router.get("/agents", response_model=Dict[str, Any])
+async def get_agent_analytics(
+    kind: Optional[str] = Query(
+        None, description="Filter by span kind (e.g. guardrail.check)"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Cross-trace agent analytics — aggregate stats grouped by agent_id.
+
+    Only spans with a non-null agent_id are included. Filter by span kind
+    to get guardrail-only or llm.generation-only breakdowns.
+    """
+    query = (
+        select(
+            Span.agent_id,
+            func.count(Span.span_id).label("total_spans"),
+            func.avg(Span.duration_ms).label("avg_latency_ms"),
+            func.avg(Span.prompt_tokens).label("avg_prompt_tokens"),
+            func.sum(Span.prompt_tokens).label("total_prompt_tokens"),
+            func.sum(Span.completion_tokens).label("total_completion_tokens"),
+        )
+        .where(Span.agent_id.isnot(None))
+        .group_by(Span.agent_id)
+        .order_by(func.count(Span.span_id).desc())
+    )
+    if kind:
+        query = query.where(Span.kind == kind)
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    agents = []
+    for row in rows:
+        cost = _pricing_table.calculate_cost(
+            None, row.total_prompt_tokens, row.total_completion_tokens
+        )
+        agents.append(
+            {
+                "agent_id": row.agent_id,
+                "total_spans": row.total_spans,
+                "total_cost": cost,
+                "avg_latency_ms": int(row.avg_latency_ms or 0),
+                "avg_prompt_tokens": int(row.avg_prompt_tokens or 0),
+            }
+        )
+
+    return {"agents": agents}
