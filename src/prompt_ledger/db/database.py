@@ -11,6 +11,8 @@ engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
     future=True,
+    pool_pre_ping=True,  # Discard stale connections (Railway closes idle ones)
+    pool_recycle=1800,  # Recycle connections after 30 min
 )
 
 # Create async session factory for FastAPI

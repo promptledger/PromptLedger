@@ -56,15 +56,22 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Create a test client with database override."""
     from httpx import ASGITransport
 
+    from prompt_ledger.settings import settings
+
     async def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # Pin settings.api_key for the test session so tests can use a known value.
+    original_key = settings.api_key
+    settings.api_key = "test-key"
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
+    settings.api_key = original_key
     app.dependency_overrides.clear()
 
 

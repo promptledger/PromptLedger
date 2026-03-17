@@ -10,16 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.prompt import Prompt, PromptVersion, compute_checksum
 from prompt_ledger.services.prompt_service import PromptService
-from prompt_ledger.settings import settings
 
 router = APIRouter()
-
-
-async def verify_api_key(api_key: str = Depends(lambda: None)) -> None:
-    """Verify API key authentication."""
-    # In a real implementation, you'd extract this from headers
-    # For now, we'll implement a simple check
-    pass
 
 
 @router.put("/{name}", response_model=Dict[str, Any])

@@ -1,10 +1,12 @@
 """API v1 module."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from prompt_ledger.api.dependencies import verify_api_key
 
 from .endpoints import analytics, code_prompts, executions, prompts
 
-api = APIRouter()
+api = APIRouter(dependencies=[Depends(verify_api_key)])
 
 api.include_router(prompts.router, prefix="/prompts", tags=["prompts"])
 api.include_router(code_prompts.router, prefix="/prompts", tags=["code-prompts"])
