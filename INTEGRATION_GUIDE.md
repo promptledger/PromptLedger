@@ -2,7 +2,10 @@
 
 **For Application Development Teams**
 
-This guide provides step-by-step instructions for integrating PromptLedger into your AI-powered applications. Whether you're building chatbots, RAG systems, or multi-agent workflows, PromptLedger gives you centralized prompt management, execution tracking, and full observability.
+This guide covers both integration modes end-to-end, with particular depth on Mode 2
+(Code-Based Tracking) for developer-owned, Git-first projects that call LLM providers
+directly. Sections 4–10 are the canonical reference for any team using Anthropic or
+another non-OpenAI provider.
 
 ---
 
@@ -10,913 +13,848 @@ This guide provides step-by-step instructions for integrating PromptLedger into 
 
 1. [Overview](#overview)
 2. [Prerequisites](#prerequisites)
-3. [Quick Start Integration](#quick-start-integration)
-4. [Integration Patterns](#integration-patterns)
-5. [Workflow Tracking for Agentic Applications](#workflow-tracking-for-agentic-applications)
-6. [Connecting to Railway-Hosted PromptLedger](#connecting-to-railway-hosted-promptledger)
-7. [Production Deployment](#production-deployment)
-8. [Security Best Practices](#security-best-practices)
-9. [Monitoring & Observability](#monitoring--observability)
-10. [Troubleshooting](#troubleshooting)
+3. [Quick Start — Mode 1 (Full Management)](#quick-start--mode-1-full-management)
+4. [When to Choose Mode 2 (Code-Based Tracking)](#when-to-choose-mode-2-code-based-tracking)
+5. [End-to-End Mode 2 Walkthrough](#end-to-end-mode-2-walkthrough)
+6. [CI/CD Dry-Run Recipe](#cicd-dry-run-recipe)
+7. [Graceful Degradation Pattern](#graceful-degradation-pattern)
+8. [Async Patterns — contextvars Isolation](#async-patterns--contextvars-isolation)
+9. [Stateless Span-Passing for Workflow Engines](#stateless-span-passing-for-workflow-engines)
+10. [Guardrail Alert Pattern](#guardrail-alert-pattern)
 11. [API Reference Quick Guide](#api-reference-quick-guide)
 
 ---
 
 ## Overview
 
-### What is PromptLedger?
+PromptLedger is an open-source prompt registry, execution, and lineage service. It solves
+**prompt sprawl** by providing a centralized control plane for prompt versions, execution
+tracking, and LLM call lineage.
 
-PromptLedger is an open-source prompt registry and execution framework that solves **prompt sprawl** in GenAI applications. It provides:
+**Two integration modes:**
 
-- **Centralized Prompt Management**: Store, version, and govern all prompts in one place
-- **Execution Tracking**: Full lineage of every LLM call with telemetry
-- **Workflow Observability**: OpenTelemetry-style tracing for multi-step agentic workflows
-- **Dual-Mode Flexibility**: Database-managed prompts OR code-based tracking
-
-### Why Integrate PromptLedger?
-
-| Challenge | PromptLedger Solution |
-|-----------|----------------------|
-| Prompts scattered across code, configs, notebooks | Centralized registry with versioning |
-| No visibility into prompt changes | Content-based versioning with full history |
-| Debugging multi-step AI workflows | Parent-child span tracking |
-| Cost attribution across teams | Execution telemetry with token/cost tracking |
-| Compliance and audit requirements | Complete execution lineage |
+| | Mode 1 — Full Management | Mode 2 — Code-Based Tracking |
+|---|---|---|
+| Prompts live in | PromptLedger database | Your application code / Git |
+| LLM calls made by | PromptLedger execution engine | Your application |
+| Provider support | OpenAI, Anthropic (Epic 1) | Any provider you can call |
+| Best for | Non-technical editors, A/B tests | Developer-owned, Git-first projects |
 
 ---
 
 ## Prerequisites
 
-### System Requirements
+- Python 3.11+
+- A running PromptLedger instance (local Docker or Railway)
+- `PROMPTLEDGER_API_URL` and `PROMPTLEDGER_API_KEY` environment variables
 
-- **Python**: 3.11+
-- **PostgreSQL**: 15+
-- **Redis**: 7+
-- **Network**: HTTPS access to PromptLedger API endpoint
+### Start PromptLedger locally
 
-### Required Credentials
+```bash
+git clone https://github.com/your-org/promptledger
+cd promptledger
+cp .env.example .env          # set API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY
+make docker-up                # postgres + redis + api + worker
+make migrate                  # alembic upgrade head
+```
 
-| Credential | Description | Where to Obtain |
-|------------|-------------|-----------------|
-| `PROMPTLEDGER_API_KEY` | API authentication key | Your PromptLedger administrator |
-| `PROMPTLEDGER_API_URL` | Base URL of PromptLedger service | See deployment options below |
-| `OPENAI_API_KEY` | OpenAI API key (if using OpenAI provider) | [OpenAI Platform](https://platform.openai.com) |
-
-### Deployment Options
-
-| Deployment | API URL Format | Notes |
-|------------|----------------|-------|
-| **Local Development** | `http://localhost:8000` | Docker Compose setup |
-| **Railway (Cloud)** | `https://promptledger-api-production-XXXX.up.railway.app` | Managed cloud hosting |
-| **Self-Hosted** | `https://promptledger.yourcompany.com` | Your infrastructure |
+Health check:
+```bash
+curl http://localhost:8000/health
+# → {"status": "healthy"}
+```
 
 ---
 
-## Quick Start Integration
+## Quick Start — Mode 1 (Full Management)
 
-### Step 1: Install Dependencies
+Use Mode 1 when you want PromptLedger to own the LLM call. Prompts are stored in the
+database and updates don't require code deployments.
+
+### Install the SDK
 
 ```bash
-pip install httpx python-dotenv
+pip install promptledger-client
 ```
 
-### Step 2: Configure Environment
-
-Create a `.env` file in your application root:
+### Configure environment
 
 ```env
-# PromptLedger Configuration
 PROMPTLEDGER_API_URL=http://localhost:8000
 PROMPTLEDGER_API_KEY=your-api-key-here
-
-# LLM Provider (required for execution)
-OPENAI_API_KEY=your-openai-key-here
 ```
 
-### Step 3: Create Your First Prompt
+### Create a prompt and execute it
 
 ```python
-import httpx
+import asyncio
 import os
-from dotenv import load_dotenv
+from promptledger_client import AsyncPromptLedgerClient
 
-load_dotenv()
-
-API_URL = os.getenv("PROMPTLEDGER_API_URL")
-API_KEY = os.getenv("PROMPTLEDGER_API_KEY")
-
-headers = {
-    "X-API-Key": API_KEY,
-    "Content-Type": "application/json"
-}
-
-# Create/update a prompt
-response = httpx.put(
-    f"{API_URL}/v1/prompts/customer_support",
-    headers=headers,
-    json={
-        "description": "Customer support response generator",
-        "owner_team": "Support-AI",
-        "template_source": """You are a helpful customer support agent.
-
-Customer Query: {{query}}
-Customer Sentiment: {{sentiment}}
-
-Provide a professional, empathetic response that addresses their concern.""",
-        "created_by": "integration-guide",
-        "set_active": True
-    }
-)
-
-print(f"Prompt created: {response.json()}")
-```
-
-### Step 4: Execute the Prompt
-
-```python
-# Synchronous execution
-response = httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={
-        "prompt_name": "customer_support",
-        "environment": "dev",
-        "variables": {
-            "query": "My order hasn't arrived yet",
-            "sentiment": "frustrated"
-        },
-        "model": {
-            "provider": "openai",
-            "model_name": "gpt-4o-mini"
-        },
-        "params": {
-            "max_new_tokens": 500,
-            "temperature": 0.7
-        }
-    }
-)
-
-result = response.json()
-print(f"Response: {result['response_text']}")
-print(f"Tokens used: {result['telemetry']['prompt_tokens']} + {result['telemetry']['response_tokens']}")
-```
-
----
-
-## Integration Patterns
-
-PromptLedger supports two distinct integration modes. Choose based on your team's workflow.
-
-### Mode 1: Full Management (Database-First)
-
-**Best for**: Marketing teams, dynamic content, non-technical users, A/B testing
-
-Prompts are stored and managed entirely in PromptLedger's database. Changes don't require code deployments.
-
-```python
-# Create prompt via API
-httpx.put(
-    f"{API_URL}/v1/prompts/welcome_email",
-    headers=headers,
-    json={
-        "template_source": "Hello {{name}}, welcome to {{company}}!",
-        "description": "Welcome email template",
-        "owner_team": "Marketing",
-        "set_active": True
-    }
-)
-
-# Execute prompt
-httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={
-        "prompt_name": "welcome_email",
-        "variables": {"name": "Sarah", "company": "Acme Corp"},
-        "model": {"provider": "openai", "model_name": "gpt-4o-mini"}
-    }
-)
-
-# Update prompt without code deployment
-httpx.put(
-    f"{API_URL}/v1/prompts/welcome_email",
-    headers=headers,
-    json={
-        "template_source": "🎉 Hello {{name}}, welcome aboard at {{company}}!",
-        "set_active": True
-    }
-)
-```
-
-### Mode 2: Code-Based Tracking (Git-First)
-
-**Best for**: Engineering teams, version control, CI/CD integration, unit-testable prompts
-
-Prompts are defined in your application code and tracked by PromptLedger for analytics and versioning.
-
-```python
-# prompts.py - Define prompts in code
-class Prompts:
-    WELCOME = "Hello {{name}}, welcome to {{app}}!"
-    ORDER_CONFIRMATION = "Order {{order_id}} is confirmed!"
-    ERROR_MESSAGE = "Error: {{error}} - Please contact support."
-
-    @classmethod
-    def get_template(cls, name: str) -> str:
-        return getattr(cls, name)
-```
-
-```python
-# main.py - Register and execute code prompts
-import hashlib
-
-# Register code prompts with PromptLedger
-def register_code_prompts():
-    prompts_to_register = []
-    for name in ["WELCOME", "ORDER_CONFIRMATION", "ERROR_MESSAGE"]:
-        template = Prompts.get_template(name)
-        template_hash = hashlib.sha256(template.encode()).hexdigest()
-        prompts_to_register.append({
-            "name": name,
-            "template_source": template,
-            "template_hash": template_hash
-        })
-
-    response = httpx.post(
-        f"{API_URL}/v1/prompts/register-code",
-        headers=headers,
-        json={"prompts": prompts_to_register}
+async def main():
+    client = AsyncPromptLedgerClient(
+        base_url=os.environ["PROMPTLEDGER_API_URL"],
+        api_key=os.environ["PROMPTLEDGER_API_KEY"],
     )
-    return response.json()
 
-# Call on application startup
-registration_result = register_code_prompts()
-print(f"Registered {len(registration_result['registered'])} prompts")
+    # Create / update a prompt (idempotent — content-based versioning)
+    import httpx
+    async with httpx.AsyncClient() as http:
+        await http.put(
+            f"{os.environ['PROMPTLEDGER_API_URL']}/v1/prompts/doc_summarizer",
+            headers={"X-API-Key": os.environ["PROMPTLEDGER_API_KEY"]},
+            json={
+                "description": "Summarize a document",
+                "owner_team": "AI-Platform",
+                "template_source": "Summarize the following:\n\n{{text}}",
+                "created_by": "integration-guide",
+                "set_active": True,
+            },
+        )
 
-# Execute with tracking
-response = httpx.post(
-    f"{API_URL}/v1/prompts/WELCOME/execute",
-    headers=headers,
-    json={
-        "variables": {"name": "John", "app": "MyApp"},
-        "model_name": "gpt-4o-mini",
-        "mode": "sync"
-    }
-)
+        # Synchronous execution (PromptLedger calls the LLM)
+        response = await http.post(
+            f"{os.environ['PROMPTLEDGER_API_URL']}/v1/executions:run",
+            headers={"X-API-Key": os.environ["PROMPTLEDGER_API_KEY"]},
+            json={
+                "prompt_name": "doc_summarizer",
+                "variables": {"text": "PromptLedger tracks prompt versions..."},
+                "model": {"provider": "openai", "model_name": "gpt-4o-mini"},
+                "params": {"max_new_tokens": 200, "temperature": 0.2},
+            },
+        )
+
+    result = response.json()
+    print(result["response_text"])
+    print(f"Tokens: {result['telemetry']['prompt_tokens']} in / "
+          f"{result['telemetry']['response_tokens']} out")
+    print(f"Cost: ${result['telemetry']['total_cost']}")
+
+asyncio.run(main())
 ```
-
-### Choosing the Right Mode
-
-| Factor | Full Management | Code-Based Tracking |
-|--------|----------------|---------------------|
-| **Team** | Mixed technical/non-technical | Developer-focused |
-| **Update Frequency** | High, dynamic changes | Low, stable templates |
-| **Version Control** | Database-managed | Git-based |
-| **Testing** | Runtime testing | Unit test friendly |
-| **Deployment** | No code changes needed | Code deployment required |
-| **Analytics** | Full prompt lifecycle | Usage tracking only |
 
 ---
 
-## Workflow Tracking for Agentic Applications
+## When to Choose Mode 2 (Code-Based Tracking)
 
-PromptLedger provides OpenTelemetry-style tracing to correlate executions across multi-step workflows—essential for debugging, cost attribution, and compliance in agentic AI systems.
+### Decision guide
 
-### Core Concepts
+Choose **Mode 2** when any of the following is true:
 
-| Concept | Description |
-|---------|-------------|
-| **Trace** | Collection of spans representing one workflow run |
-| **Span** | Single operation (LLM call, tool use, retrieval) |
-| **trace_id** | Groups all spans in one workflow |
-| **parent_span_id** | Creates parent-child relationships |
+- **Your LLM provider is not (yet) supported by PromptLedger's execution engine.**
+  Mode 1's `/v1/executions:run` routes calls through PromptLedger's provider adapters.
+  If you call a provider directly — a fine-tuned model behind your own endpoint, a
+  local Ollama instance, or any provider without an adapter — Mode 2 is the right choice.
+  You keep full control of the LLM call; PromptLedger observes it.
 
-### Example: RAG Pipeline with Guardrails
+- **Your team is Git-first.** Prompts are code. They go through PR review, pass CI, and
+  are deployed alongside the application that uses them. The database is the wrong home.
 
-```python
-import uuid
-import httpx
+- **You want unit-testable prompts.** Templates defined as Python constants are trivially
+  testable with no network calls. Mode 1 prompts require a running PromptLedger instance
+  to render.
 
-trace_id = str(uuid.uuid4())
+- **Prompt changes are infrequent and deliberate.** If your prompt template changes on
+  every deploy (or less), the benefit of runtime editability doesn't justify the
+  operational complexity of a database-managed prompt.
 
-# Step 1: Document Retrieval
-retrieval_response = httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={
-        "prompt_name": "document_retrieval",
-        "variables": {"query": "What is our PTO policy?"},
-        "model": {"provider": "openai", "model_name": "gpt-4o-mini"},
-        "trace_id": trace_id,
-        "span_name": "rag_retrieval",
-        "span_kind": "retrieval"
-    }
-)
-retrieval_span_id = retrieval_response.json()["span_id"]
+Choose **Mode 1** when:
 
-# Step 2: Response Generation (child of retrieval)
-generation_response = httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={
-        "prompt_name": "policy_response",
-        "variables": {
-            "query": "What is our PTO policy?",
-            "context": retrieval_response.json()["response_text"]
-        },
-        "model": {"provider": "openai", "model_name": "gpt-4o-mini"},
-        "trace_id": trace_id,
-        "parent_span_id": retrieval_span_id,
-        "span_name": "response_generation",
-        "span_kind": "llm"
-    }
-)
-generation_span_id = generation_response.json()["span_id"]
+- Non-engineers (product, marketing, support) need to edit prompts without a code deploy.
+- You need A/B testing or canary deployments of prompt versions without redeploying code.
+- You want PromptLedger to handle retry logic, async queuing, and provider failover.
 
-# Step 3: Grounding Guardrail (child of generation)
-guardrail_response = httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={
-        "prompt_name": "grounding_check",
-        "variables": {
-            "response": generation_response.json()["response_text"],
-            "source_docs": retrieval_response.json()["response_text"]
-        },
-        "model": {"provider": "openai", "model_name": "gpt-4o-mini"},
-        "trace_id": trace_id,
-        "parent_span_id": generation_span_id,
-        "span_name": "grounding_guardrail",
-        "span_kind": "guardrail"
-    }
-)
+### Trade-off summary
 
-# Get complete workflow trace
-trace_summary = httpx.get(
-    f"{API_URL}/v1/traces/{trace_id}/summary",
-    headers=headers
-)
-print(f"Total duration: {trace_summary.json()['duration_ms']}ms")
-print(f"Total tokens: {trace_summary.json()['total_tokens']}")
-print(f"Total cost: ${trace_summary.json()['total_cost']}")
-```
+| | Mode 1 | Mode 2 |
+|---|---|---|
+| Provider flexibility | Adapters only | Any provider you can call |
+| Prompt editability | Live, no deploy | Code deploy required |
+| Unit testability | Network required | Trivial (`tracker=None`) |
+| Observability setup | Automatic | ~20 lines per call site |
+| CI validation | N/A | `dry_run: true` |
+| Async fan-out control | Celery-managed | Your application's event loop |
 
-### Logging External LLM Calls
+---
 
-Track LLM calls made directly to providers (outside PromptLedger) for complete visibility:
+## End-to-End Mode 2 Walkthrough
 
-```python
-import openai
-import time
+This section covers a complete Mode 2 integration using Anthropic as the LLM provider.
+The same pattern works for any provider you call directly.
 
-# Your application makes a direct OpenAI call
-start_time = time.time()
-openai_response = openai.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Analyze this data..."}]
-)
-duration_ms = int((time.time() - start_time) * 1000)
-
-# Log it to PromptLedger for tracking
-httpx.post(
-    f"{API_URL}/v1/spans",
-    headers=headers,
-    json={
-        "trace_id": trace_id,
-        "parent_span_id": parent_span_id,
-        "name": "direct_openai_analysis",
-        "kind": "llm",
-        "input_data": {"messages": [{"role": "user", "content": "Analyze..."}]},
-        "output_data": {"response": openai_response.choices[0].message.content},
-        "model": "gpt-4",
-        "prompt_tokens": openai_response.usage.prompt_tokens,
-        "completion_tokens": openai_response.usage.completion_tokens,
-        "duration_ms": duration_ms
-    }
-)
-```
-
-### Workflow Analytics Endpoints
+### 1. Install the SDK
 
 ```bash
-# Get trace summary
-GET /v1/traces/{trace_id}/summary
-
-# Get trace tree (parent-child hierarchy)
-GET /v1/traces/{trace_id}/tree
-
-# Get all spans in a trace
-GET /v1/traces/{trace_id}/spans
+pip install promptledger-client anthropic
 ```
 
----
-
-## Connecting to Railway-Hosted PromptLedger
-
-If your organization deploys PromptLedger on [Railway](https://railway.app), follow these steps to connect your application.
-
-> 📖 **For deploying PromptLedger itself to Railway**, see [RAILWAY_INTEGRATION.md](RAILWAY_INTEGRATION.md).
-
-### Railway Environment Setup
+### 2. Configure environment
 
 ```env
-# .env for Railway-hosted PromptLedger
-PROMPTLEDGER_API_URL=https://promptledger-api-production-XXXX.up.railway.app
-PROMPTLEDGER_API_KEY=your-railway-api-key-here
-OPENAI_API_KEY=your-openai-key-here
+PROMPTLEDGER_API_URL=https://your-instance.up.railway.app
+PROMPTLEDGER_API_KEY=your-api-key-here
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-> **Note**: Get your exact Railway URL from your Railway dashboard under your PromptLedger API service → Settings → Domains.
-
-### Connecting from Your Application
+### 3. Define your prompts in code
 
 ```python
-import httpx
+# my_app/prompts.py
+PAPER_EXTRACTION = """\
+You are a research assistant. Extract the key contributions from this paper.
+
+Title: {{title}}
+Abstract: {{abstract}}
+
+Return a bullet list of the 3–5 most important contributions."""
+
+NEWSLETTER_SYNTHESIS = """\
+Synthesize the following research summaries into a newsletter section.
+
+Summaries:
+{{summaries}}
+
+Write 2–3 paragraphs suitable for a technical newsletter."""
+```
+
+### 4. Register prompts at startup
+
+```python
+# my_app/startup.py
 import os
-from dotenv import load_dotenv
+from promptledger_client import AsyncPromptLedgerClient
+from promptledger_client.models import RegistrationPayload
+from my_app.prompts import PAPER_EXTRACTION, NEWSLETTER_SYNTHESIS
 
-load_dotenv()
 
-# Railway-hosted PromptLedger configuration
-API_URL = os.getenv("PROMPTLEDGER_API_URL")  # e.g., https://promptledger-api-production-XXXX.up.railway.app
-API_KEY = os.getenv("PROMPTLEDGER_API_KEY")
+async def register_prompts(tracker: AsyncPromptLedgerClient | None = None) -> None:
+    """Register code prompts with PromptLedger.
 
-headers = {
-    "X-API-Key": API_KEY,
-    "Content-Type": "application/json"
-}
+    Pass tracker=None in tests to skip registration entirely.
+    """
+    if tracker is None:
+        return
 
-# Test connection
-def test_connection():
-    response = httpx.get(f"{API_URL}/health", timeout=10.0)
-    if response.status_code == 200:
-        print("✅ Connected to Railway-hosted PromptLedger")
-        return True
-    else:
-        print(f"❌ Connection failed: {response.status_code}")
-        return False
+    await tracker.register_code_prompts([
+        RegistrationPayload(
+            name="paper_agent.extraction",
+            template_source=PAPER_EXTRACTION,
+            description="Extract key contributions from a research paper",
+            owner_team="ResearchKG",
+        ),
+        RegistrationPayload(
+            name="paper_agent.synthesis",
+            template_source=NEWSLETTER_SYNTHESIS,
+            description="Synthesize research summaries into newsletter prose",
+            owner_team="ResearchKG",
+        ),
+    ])
+```
 
-# Execute prompt via Railway
-def execute_prompt(prompt_name: str, variables: dict):
-    response = httpx.post(
-        f"{API_URL}/v1/executions:run",
-        headers=headers,
-        json={
-            "prompt_name": prompt_name,
-            "environment": "production",
-            "variables": variables,
-            "model": {"provider": "openai", "model_name": "gpt-4o-mini"}
-        },
-        timeout=60.0
+Call this from your application's startup sequence:
+
+```python
+# my_app/main.py
+import os
+import asyncio
+from promptledger_client import AsyncPromptLedgerClient
+from my_app.startup import register_prompts
+
+
+async def lifespan():
+    tracker = AsyncPromptLedgerClient(
+        base_url=os.environ["PROMPTLEDGER_API_URL"],
+        api_key=os.environ["PROMPTLEDGER_API_KEY"],
     )
-    return response.json()
+    await register_prompts(tracker)
+    # ... rest of startup
 ```
 
-### Railway-Specific Considerations
-
-| Consideration | Recommendation |
-|---------------|----------------|
-| **Timeouts** | Railway has 100s request timeout; use async for long operations |
-| **Private Networking** | Use Railway's private network for service-to-service calls |
-| **Environment Variables** | Store secrets in Railway's encrypted environment variables |
-| **Scaling** | Railway auto-scales; monitor worker queue depth for async jobs |
-
-### Connecting from Another Railway Service
-
-If your application is also on Railway, use private networking for faster, more secure connections:
+### 5. Wrap a direct Anthropic call with span logging
 
 ```python
+# my_app/agents/researcher.py
 import os
-
-# Use Railway's internal networking (within same project)
-# Format: http://<service-name>.railway.internal:<port>
-API_URL = os.getenv(
-    "PROMPTLEDGER_API_URL",
-    "http://promptledger-api.railway.internal:8000"  # Internal URL
-)
-```
-
-### Frontend Integration (React/Next.js on Railway)
-
-```javascript
-// services/promptLedger.js
-const API_URL = process.env.NEXT_PUBLIC_PROMPTLEDGER_URL
-  || 'https://promptledger-api-production-XXXX.up.railway.app';
-
-export async function executePrompt(promptName, variables) {
-  const response = await fetch(`${API_URL}/v1/executions:run`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': process.env.PROMPTLEDGER_API_KEY,
-    },
-    body: JSON.stringify({
-      prompt_name: promptName,
-      environment: 'production',
-      variables,
-      model: { provider: 'openai', model_name: 'gpt-4o-mini' }
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`PromptLedger error: ${response.status}`);
-  }
-
-  return response.json();
-}
-```
-
-### Railway Deployment Checklist
-
-Before going live with Railway-hosted PromptLedger:
-
-- [ ] **API URL configured** — Verify `PROMPTLEDGER_API_URL` points to your Railway service
-- [ ] **API key set** — Use a strong, randomly-generated key (not the dev default)
-- [ ] **OpenAI key configured** — Set `OPENAI_API_KEY` in Railway environment
-- [ ] **Health check passing** — `GET /health` returns 200
-- [ ] **Worker service running** — Check Railway dashboard for worker status
-- [ ] **Database migrations applied** — Run `alembic upgrade head` on deployment
-- [ ] **Async execution tested** — Verify submit + poll workflow works
-
-### Railway Pricing Impact
-
-| Component | Estimated Monthly Cost |
-|-----------|----------------------|
-| PromptLedger API | $5–20 (usage-based) |
-| Celery Worker | $5–20 (usage-based) |
-| Redis | $5–15 |
-| PostgreSQL (shared with your app) | Included |
-
----
-
-## Production Deployment
-
-### Asynchronous Execution (Recommended)
-
-For production workloads, use async execution to avoid blocking your application:
-
-```python
-# Submit execution asynchronously
-submit_response = httpx.post(
-    f"{API_URL}/v1/executions:submit",
-    headers=headers,
-    json={
-        "prompt_name": "document_summarizer",
-        "variables": {"document": large_document_text},
-        "model": {"provider": "openai", "model_name": "gpt-4o-mini"},
-        "params": {"max_new_tokens": 2000}
-    }
-)
-execution_id = submit_response.json()["execution_id"]
-
-# Poll for completion
 import time
+from datetime import datetime, timezone
 
-while True:
-    status_response = httpx.get(
-        f"{API_URL}/v1/executions/{execution_id}",
-        headers=headers
+import anthropic
+from promptledger_client import AsyncPromptLedgerClient
+from promptledger_client.models import SpanPayload
+from promptledger_client.context import current_trace_id, current_parent_span_id
+
+from my_app.prompts import PAPER_EXTRACTION
+
+
+async def extract_paper(
+    title: str,
+    abstract: str,
+    tracker: AsyncPromptLedgerClient | None = None,
+) -> str:
+    """Extract key contributions from a paper and log the LLM call."""
+
+    # Render the template
+    rendered = PAPER_EXTRACTION.replace("{{title}}", title).replace(
+        "{{abstract}}", abstract
     )
-    status = status_response.json()
 
-    if status["status"] in ["succeeded", "failed"]:
-        break
-
-    time.sleep(1)  # Poll every second
-
-if status["status"] == "succeeded":
-    print(f"Result: {status['response_text']}")
-else:
-    print(f"Error: {status['error_message']}")
-```
-
-### Idempotency
-
-Prevent duplicate executions using idempotency keys:
-
-```python
-import uuid
-
-idempotency_key = f"order-{order_id}-confirmation"
-
-response = httpx.post(
-    f"{API_URL}/v1/executions:submit",
-    headers={
-        **headers,
-        "Idempotency-Key": idempotency_key
-    },
-    json={
-        "prompt_name": "order_confirmation",
-        "variables": {"order_id": order_id}
-    }
-)
-
-# Same idempotency key returns the same execution (no duplicate)
-```
-
-### Correlation IDs
-
-Link related executions across your system:
-
-```python
-correlation_id = f"user-session-{session_id}"
-
-response = httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={
-        "prompt_name": "chat_response",
-        "variables": {"message": user_message},
-        "correlation_id": correlation_id  # Links all executions for this session
-    }
-)
-```
-
-### Environment Configuration
-
-Use environments to separate dev, staging, and production:
-
-```python
-# Development
-response = httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={
-        "prompt_name": "customer_support",
-        "environment": "dev",  # or "staging", "production"
-        "variables": {...}
-    }
-)
-```
-
----
-
-## Security Best Practices
-
-### API Key Management
-
-```python
-import os
-
-# ❌ Never hardcode API keys
-API_KEY = "sk-abc123..."
-
-# ✅ Use environment variables
-API_KEY = os.getenv("PROMPTLEDGER_API_KEY")
-
-# ✅ Use secrets management (AWS Secrets Manager, HashiCorp Vault, etc.)
-from your_secrets_manager import get_secret
-API_KEY = get_secret("promptledger/api-key")
-```
-
-### Key Rotation
-
-Request multiple API keys and rotate periodically:
-
-```python
-# Support graceful key rotation
-API_KEYS = [
-    os.getenv("PROMPTLEDGER_API_KEY_PRIMARY"),
-    os.getenv("PROMPTLEDGER_API_KEY_SECONDARY")
-]
-
-def make_request_with_fallback(url, json_data):
-    for key in API_KEYS:
-        if not key:
-            continue
-        try:
-            response = httpx.post(
-                url,
-                headers={"X-API-Key": key, "Content-Type": "application/json"},
-                json=json_data
-            )
-            if response.status_code != 401:
-                return response
-        except Exception:
-            continue
-    raise Exception("All API keys failed")
-```
-
-### Sensitive Data Handling
-
-```python
-# ❌ Don't log full prompts with PII
-print(f"Executing prompt with variables: {variables}")
-
-# ✅ Redact sensitive fields
-def redact_sensitive(variables: dict) -> dict:
-    sensitive_keys = {"ssn", "credit_card", "password", "email"}
-    return {
-        k: "[REDACTED]" if k.lower() in sensitive_keys else v
-        for k, v in variables.items()
-    }
-
-print(f"Executing prompt with variables: {redact_sensitive(variables)}")
-```
-
-### Network Security
-
-- Always use HTTPS in production
-- Configure firewall rules to restrict PromptLedger access to known IPs
-- Use VPN or private networking for internal deployments
-
----
-
-## Monitoring & Observability
-
-### Health Checks
-
-Integrate PromptLedger health into your monitoring:
-
-```python
-def check_promptledger_health():
-    try:
-        response = httpx.get(f"{API_URL}/health", timeout=5.0)
-        return response.status_code == 200
-    except Exception:
-        return False
-
-# Add to your health check endpoint
-@app.get("/health")
-def health():
-    return {
-        "status": "healthy",
-        "dependencies": {
-            "promptledger": check_promptledger_health()
-        }
-    }
-```
-
-### Execution Metrics
-
-Track key metrics in your application:
-
-```python
-from prometheus_client import Counter, Histogram
-
-PROMPT_EXECUTIONS = Counter(
-    "promptledger_executions_total",
-    "Total prompt executions",
-    ["prompt_name", "status", "environment"]
-)
-
-PROMPT_LATENCY = Histogram(
-    "promptledger_execution_latency_ms",
-    "Prompt execution latency",
-    ["prompt_name"]
-)
-
-def execute_prompt_with_metrics(prompt_name, variables, **kwargs):
+    # Call Anthropic directly
+    client = anthropic.AsyncAnthropic()
     start = time.time()
-    try:
-        response = httpx.post(
-            f"{API_URL}/v1/executions:run",
-            headers=headers,
-            json={"prompt_name": prompt_name, "variables": variables, **kwargs}
-        )
-        result = response.json()
+    start_time = datetime.now(timezone.utc)
 
-        PROMPT_EXECUTIONS.labels(
-            prompt_name=prompt_name,
-            status=result.get("status", "unknown"),
-            environment=kwargs.get("environment", "dev")
-        ).inc()
+    response = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=512,
+        messages=[{"role": "user", "content": rendered}],
+    )
 
-        PROMPT_LATENCY.labels(prompt_name=prompt_name).observe(
-            result.get("telemetry", {}).get("latency_ms", 0)
-        )
+    duration_ms = int((time.time() - start) * 1000)
+    result_text = response.content[0].text
 
-        return result
-    except Exception as e:
-        PROMPT_EXECUTIONS.labels(
-            prompt_name=prompt_name,
-            status="error",
-            environment=kwargs.get("environment", "dev")
-        ).inc()
-        raise
+    # Log the span to PromptLedger (no-op if tracker is None)
+    if tracker is not None:
+        span_id = await tracker.log_span(SpanPayload(
+            trace_id=current_trace_id(),
+            parent_span_id=current_parent_span_id(),
+            name="paper_agent.extraction",
+            kind="llm.generation",
+            start_time=start_time.isoformat(),
+            duration_ms=duration_ms,
+            status="ok",
+            model="claude-haiku-4-5-20251001",
+            prompt_tokens=response.usage.input_tokens,
+            completion_tokens=response.usage.output_tokens,
+            prompt_name="paper_agent.extraction",
+            input_data={"title": title, "abstract": abstract[:200]},
+        ))
+
+    return result_text
 ```
 
-### Logging Best Practices
+### 6. Multi-step workflows with contextvars trace propagation
 
 ```python
-import logging
-import json
+# my_app/workflows/research_pipeline.py
+import asyncio
+import os
+from promptledger_client import AsyncPromptLedgerClient
+from promptledger_client.context import start_trace, set_parent_span_id
+from promptledger_client.models import SpanPayload
+from my_app.agents.researcher import extract_paper
+from my_app.agents.synthesizer import synthesize_newsletter
 
-logger = logging.getLogger("promptledger")
 
-def execute_with_logging(prompt_name, variables, **kwargs):
-    execution_id = None
-    try:
-        response = httpx.post(
-            f"{API_URL}/v1/executions:run",
-            headers=headers,
-            json={"prompt_name": prompt_name, "variables": variables, **kwargs}
+async def run_research_pipeline(
+    papers: list[dict],
+    tracker: AsyncPromptLedgerClient | None = None,
+) -> str:
+    """Run the full research pipeline for a batch of papers."""
+
+    # Start a new trace for this pipeline run
+    trace_id = start_trace()  # stored in a contextvar; visible to all coroutines below
+
+    # Log a root span for the pipeline
+    if tracker is not None:
+        root_span_id = await tracker.log_span(SpanPayload(
+            trace_id=trace_id,
+            name="research_pipeline",
+            kind="workflow.phase",
+            start_time=_now(),
+            status="ok",
+        ))
+        set_parent_span_id(root_span_id)  # child spans will nest under this
+
+    # Extract contributions from all papers (sequential for simplicity)
+    extractions = []
+    for paper in papers:
+        text = await extract_paper(
+            title=paper["title"],
+            abstract=paper["abstract"],
+            tracker=tracker,
         )
-        result = response.json()
-        execution_id = result.get("execution_id")
+        extractions.append(text)
 
-        logger.info(json.dumps({
-            "event": "prompt_execution",
-            "prompt_name": prompt_name,
-            "execution_id": execution_id,
-            "status": result.get("status"),
-            "latency_ms": result.get("telemetry", {}).get("latency_ms"),
-            "tokens": result.get("telemetry", {}).get("prompt_tokens", 0) +
-                      result.get("telemetry", {}).get("response_tokens", 0)
-        }))
+    # Synthesize into newsletter prose
+    newsletter = await synthesize_newsletter(
+        summaries="\n\n".join(extractions),
+        tracker=tracker,
+    )
 
-        return result
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "prompt_execution_error",
-            "prompt_name": prompt_name,
-            "execution_id": execution_id,
-            "error": str(e)
-        }))
-        raise
+    return newsletter
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+```
+
+### 7. Test isolation with `tracker=None`
+
+The injection pattern makes testing trivial — pass `tracker=None` and no network calls
+are made to PromptLedger:
+
+```python
+# tests/test_researcher.py
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+from my_app.agents.researcher import extract_paper
+
+
+async def test_extract_paper_no_tracker(monkeypatch):
+    """extract_paper works correctly with tracker=None (no PromptLedger calls)."""
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text="Key contribution: ...")]
+    mock_response.usage.input_tokens = 200
+    mock_response.usage.output_tokens = 80
+
+    mock_client = AsyncMock()
+    mock_client.messages.create.return_value = mock_response
+    monkeypatch.setattr("anthropic.AsyncAnthropic", lambda: mock_client)
+
+    result = await extract_paper(
+        title="Test Paper",
+        abstract="This paper presents...",
+        tracker=None,  # no PromptLedger calls
+    )
+
+    assert "Key contribution" in result
+    mock_client.messages.create.assert_awaited_once()
 ```
 
 ---
 
-## Troubleshooting
+## CI/CD Dry-Run Recipe
 
-### Common Issues
+Use `dry_run: true` on `POST /v1/prompts/register-code` to assert that no unregistered
+prompt changes have slipped into a release branch. The response reports what _would_
+change without writing anything to the database.
 
-#### 401 Unauthorized
+### GitHub Actions step
 
+```yaml
+# .github/workflows/ci.yml
+
+jobs:
+  validate-prompts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install promptledger-client
+
+      - name: Dry-run prompt registration
+        env:
+          PROMPTLEDGER_API_URL: ${{ secrets.PROMPTLEDGER_API_URL }}
+          PROMPTLEDGER_API_KEY: ${{ secrets.PROMPTLEDGER_API_KEY }}
+        run: python scripts/validate_prompts.py
 ```
-{"detail": "Invalid API key"}
-```
-
-**Solutions**:
-- Verify `X-API-Key` header is set correctly
-- Check API key hasn't expired or been revoked
-- Ensure no leading/trailing whitespace in key
-
-#### 404 Prompt Not Found
-
-```
-{"detail": "Prompt 'my_prompt' not found"}
-```
-
-**Solutions**:
-- Verify prompt name spelling (case-sensitive)
-- Check prompt was created with `set_active: true`
-- List all prompts: `GET /v1/prompts`
-
-#### 422 Validation Error
-
-```
-{"detail": [{"loc": ["body", "variables", "text"], "msg": "field required"}]}
-```
-
-**Solutions**:
-- Check all template variables are provided
-- Verify variable names match template placeholders exactly
-- Review template: `GET /v1/prompts/{name}`
-
-#### 500 Provider Error
-
-```
-{"detail": "Provider error: Rate limit exceeded"}
-```
-
-**Solutions**:
-- Implement exponential backoff
-- Check your OpenAI API quota
-- Use async execution for high-volume workloads
-
-### Debug Mode
-
-Enable verbose logging for troubleshooting:
 
 ```python
+# scripts/validate_prompts.py
+"""CI validation: assert no unregistered prompt changes in this branch."""
+
+import asyncio
+import os
+import sys
 import httpx
-import logging
+from my_app.prompts import PAPER_EXTRACTION, NEWSLETTER_SYNTHESIS
+import hashlib
 
-# Enable httpx debug logging
-logging.basicConfig(level=logging.DEBUG)
-logging.getLogger("httpx").setLevel(logging.DEBUG)
 
-# Make request with extended timeout
-response = httpx.post(
-    f"{API_URL}/v1/executions:run",
-    headers=headers,
-    json={...},
-    timeout=60.0
-)
+def checksum(template: str) -> str:
+    return hashlib.sha256(template.encode()).hexdigest()
+
+
+async def main() -> None:
+    url = os.environ["PROMPTLEDGER_API_URL"]
+    key = os.environ["PROMPTLEDGER_API_KEY"]
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{url}/v1/prompts/register-code",
+            headers={"X-API-Key": key},
+            json={
+                "prompts": [
+                    {
+                        "name": "paper_agent.extraction",
+                        "template_source": PAPER_EXTRACTION,
+                        "template_hash": checksum(PAPER_EXTRACTION),
+                    },
+                    {
+                        "name": "paper_agent.synthesis",
+                        "template_source": NEWSLETTER_SYNTHESIS,
+                        "template_hash": checksum(NEWSLETTER_SYNTHESIS),
+                    },
+                ],
+                "dry_run": True,  # nothing is written
+            },
+        )
+        response.raise_for_status()
+
+    data = response.json()
+    assert data["dry_run"] is True
+
+    changed = [d for d in data["details"] if d["action"] != "unchanged"]
+    if changed:
+        print("ERROR: The following prompts have uncommitted template changes:")
+        for item in changed:
+            print(f"  {item['name']}: {item['action']}")
+        print()
+        print("Register the updated prompts before merging to main:")
+        print("  python scripts/register_prompts.py")
+        sys.exit(1)
+
+    print(f"OK: all {data['unchanged']} prompts are in sync with PromptLedger.")
+
+
+asyncio.run(main())
 ```
 
-### Support Checklist
+**Dry-run response shape:**
 
-When requesting support, provide:
+```json
+{
+  "registered": 0,
+  "updated": 1,
+  "unchanged": 1,
+  "dry_run": true,
+  "details": [
+    {"name": "paper_agent.extraction", "action": "update",     "hash_changed": true},
+    {"name": "paper_agent.synthesis",  "action": "unchanged",  "hash_changed": false}
+  ]
+}
+```
 
-1. **Execution ID** (if available)
-2. **Trace ID** (for workflow issues)
-3. **Error message** (full JSON response)
-4. **Timestamp** of the issue
-5. **Environment** (dev/staging/production)
-6. **Prompt name** involved
+---
+
+## Graceful Degradation Pattern
+
+PromptLedger is observability infrastructure — your application must work even when it
+is unreachable. The canonical pattern: if `PROMPTLEDGER_API_URL` is absent, skip all
+SDK imports and continue normally.
+
+```python
+# my_app/observability.py
+"""Optional PromptLedger integration.
+
+If PROMPTLEDGER_API_URL is not set, this module exports a None tracker and
+all call sites that check `if tracker is not None` are no-ops.
+"""
+
+import os
+from typing import Optional
+
+_url = os.environ.get("PROMPTLEDGER_API_URL")
+_key = os.environ.get("PROMPTLEDGER_API_KEY")
+
+tracker: Optional[object] = None
+
+if _url and _key:
+    # Only import the SDK when the service is actually configured.
+    # This means the package does not need to be installed in environments
+    # where PromptLedger is not used (e.g. local unit test runs).
+    try:
+        from promptledger_client import AsyncPromptLedgerClient
+
+        tracker = AsyncPromptLedgerClient(base_url=_url, api_key=_key)
+    except Exception as exc:  # import error, validation error, etc.
+        import logging
+        logging.getLogger(__name__).warning(
+            "PromptLedger client failed to initialise — observability disabled: %s", exc
+        )
+```
+
+Usage at every call site:
+
+```python
+from my_app.observability import tracker
+
+result = await extract_paper(title=..., abstract=..., tracker=tracker)
+# tracker is None → no PromptLedger calls, no import, no error
+```
+
+**Startup registration with graceful degradation:**
+
+```python
+# my_app/main.py
+from my_app.observability import tracker
+from my_app.startup import register_prompts
+
+async def on_startup():
+    await register_prompts(tracker)  # no-op when tracker is None
+```
+
+---
+
+## Async Patterns — contextvars Isolation
+
+### The footgun
+
+`contextvars.ContextVar` values are **copied into child tasks at creation time** and do
+not propagate back to the parent. This means that if one `asyncio.Task` calls
+`start_trace()` or `set_parent_span_id()`, sibling tasks spawned afterwards will _not_
+see those values unless they are passed explicitly.
+
+This bites agentic and MCP applications that launch parallel tool calls from a single
+agent turn:
+
+```python
+# ❌ WRONG — sibling tasks do NOT share contextvars
+import asyncio
+from promptledger_client.context import start_trace, current_trace_id
+
+async def agent_turn():
+    trace_id = start_trace()  # sets ContextVar in THIS task
+
+    # These tasks are spawned AFTER start_trace().
+    # Each gets a copy of the context at spawn time — that copy DOES include trace_id.
+    # But changes made inside the child tasks (e.g. set_parent_span_id) do NOT
+    # propagate back to the parent or to each other.
+    results = await asyncio.gather(
+        tool_search(query="..."),
+        tool_lookup(key="..."),
+    )
+```
+
+In the example above, `current_trace_id()` will return the correct value inside
+`tool_search` and `tool_lookup` because they were spawned _after_ `start_trace()` set
+the ContextVar. The trap is `set_parent_span_id()` — if you set a parent span ID inside
+a child task, the parent task and sibling tasks will not see it.
+
+### The correct pattern for parallel tool calls
+
+Pass `parent_span_id` explicitly through function parameters for any span that needs
+to nest under a specific parent:
+
+```python
+# ✅ CORRECT — parallel tool calls with explicit parent
+import asyncio
+from promptledger_client.context import start_trace, current_trace_id
+from promptledger_client.models import SpanPayload
+
+
+async def agent_turn(tracker):
+    trace_id = start_trace()
+
+    # Log the turn span first to get its ID
+    if tracker:
+        turn_span_id = await tracker.log_span(SpanPayload(
+            trace_id=trace_id,
+            name="agent_turn",
+            kind="llm.generation",
+            start_time=_now(),
+            status="ok",
+        ))
+    else:
+        turn_span_id = None
+
+    # Pass turn_span_id explicitly — do NOT rely on contextvars for the children
+    results = await asyncio.gather(
+        tool_search(query="...", parent_span_id=turn_span_id, tracker=tracker),
+        tool_lookup(key="...",   parent_span_id=turn_span_id, tracker=tracker),
+    )
+    return results
+
+
+async def tool_search(query: str, parent_span_id: str | None, tracker):
+    # ... do the search ...
+    if tracker:
+        await tracker.log_span(SpanPayload(
+            trace_id=current_trace_id(),
+            parent_span_id=parent_span_id,   # explicit, not from contextvar
+            name="tool.search",
+            kind="tool.call",
+            start_time=_now(),
+            status="ok",
+        ))
+```
+
+### Summary rules
+
+| Scenario | Use contextvars? |
+|---|---|
+| Sequential calls within a single async function | Yes — `current_trace_id()` works |
+| Parallel `asyncio.gather()` — reading `trace_id` | Yes — copied at spawn time |
+| Parallel `asyncio.gather()` — setting `parent_span_id` | No — pass explicitly |
+| Across process/task boundaries (Celery, serverless) | No — see next section |
+
+---
+
+## Stateless Span-Passing for Workflow Engines
+
+`contextvars` only survive within a single process and a single event loop iteration.
+Serverless environments and workflow engines — Railway sleeping, Celery tasks, multi-step
+workflow frameworks — execute steps in separate invocations and cannot rely on in-memory
+context to carry `trace_id` or `parent_span_id` across steps.
+
+**The canonical pattern: pass span IDs explicitly through the workflow state object.**
+
+```python
+# ✅ Workflow engine pattern — span IDs in state, not contextvars
+
+async def start_discussion_phase(state: dict, tracker) -> dict:
+    """Phase start: log a phase span and store its ID in state."""
+    if tracker:
+        state["trace_id"] = state.get("trace_id") or str(uuid.uuid4())
+        state["phase_span_id"] = await tracker.log_span(SpanPayload(
+            trace_id=state["trace_id"],
+            name="open_discussion",
+            kind="workflow.phase",
+            start_time=_now(),
+            status="ok",
+        ))
+    return state
+
+
+async def run_agent_turn(
+    state: dict,
+    agent_id: str,
+    message: str,
+    tracker,
+) -> dict:
+    """Single agent turn: log a turn span nested under the phase span."""
+
+    # Call the LLM
+    response = await call_llm(agent_id=agent_id, message=message)
+
+    if tracker:
+        turn_span_id = await tracker.log_span(SpanPayload(
+            trace_id=state["trace_id"],
+            parent_span_id=state["phase_span_id"],   # from state, not contextvars
+            agent_id=agent_id,
+            name="paper_agent_discussion",
+            kind="llm.generation",
+            start_time=response.start_time,
+            duration_ms=response.duration_ms,
+            status="ok",
+            model=response.model,
+            prompt_tokens=response.input_tokens,
+            completion_tokens=response.output_tokens,
+            prompt_name="paper_agent_discussion",
+        ))
+        state["last_turn_span_id"] = turn_span_id
+
+    state["messages"].append({"agent": agent_id, "content": response.text})
+    return state
+```
+
+**Rule of thumb:**
+
+- Use `contextvars` for in-process async fan-out (parallel tool calls within a single
+  agent turn in a long-running server process).
+- Use explicit state passing for anything that crosses a process boundary, a sleep/wake
+  cycle, or a workflow step transition.
+
+---
+
+## Guardrail Alert Pattern
+
+In multi-agent workflows, guardrail checks evaluate LLM outputs in real time.
+The canonical PromptLedger pattern: **each guardrail evaluation is its own child span**
+under the turn span it checked.
+
+### Why child spans, not `attributes`
+
+Stuffing alerts into a span's `attributes` JSONB field loses queryability.
+Child spans are first-class: they appear in the trace tree, support filtering by `kind`,
+and can be counted and aggregated across agents.
+
+### Span structure
+
+```
+turn span  (paper_1, kind="llm.generation", status="ok")
+  └── guardrail span  (kind="guardrail.check", status="warning")
+        attributes: {
+          "alert_type":      "grounding_violation",
+          "severity":        "WARNING",
+          "flagged_text":    "we achieved 94.2% on MMLU",
+          "source_evidence": "Table 3 shows 91.8%"
+        }
+```
+
+### Implementation
+
+```python
+async def run_guardrail_check(
+    state: dict,
+    turn_span_id: str,
+    agent_id: str,
+    response_text: str,
+    source_context: str,
+    tracker,
+) -> list[dict]:
+    """Run a grounding check and log the result as a child span."""
+
+    alerts = await evaluate_grounding(response_text, source_context)
+
+    if tracker:
+        status = "ok" if not alerts else (
+            "error" if any(a["severity"] == "CRITICAL" for a in alerts) else "warning"
+        )
+
+        if not alerts:
+            # No violations — one span, status="ok", no alerts in attributes
+            await tracker.log_span(SpanPayload(
+                trace_id=state["trace_id"],
+                parent_span_id=turn_span_id,
+                agent_id=agent_id,
+                name="guardrail.grounding",
+                kind="guardrail.check",
+                start_time=_now(),
+                status="ok",
+            ))
+        else:
+            # One child span per alert (queryable individually)
+            for alert in alerts:
+                await tracker.log_span(SpanPayload(
+                    trace_id=state["trace_id"],
+                    parent_span_id=turn_span_id,
+                    agent_id=agent_id,
+                    name="guardrail.grounding",
+                    kind="guardrail.check",
+                    start_time=_now(),
+                    status=status,
+                    attributes={
+                        "alert_type":      alert["type"],
+                        "severity":        alert["severity"],
+                        "flagged_text":    alert.get("flagged_text", ""),
+                        "source_evidence": alert.get("source_evidence", ""),
+                    },
+                ))
+
+    return alerts
+```
+
+### Querying guardrail violations
+
+```bash
+# All guardrail spans across all agents (Story 1.7 analytics endpoint)
+GET /v1/analytics/agents?kind=guardrail.check
+```
+
+```bash
+# All spans for a specific trace (includes guardrail child spans in tree)
+GET /v1/traces/{trace_id}
+```
+
+### `kind` values reference
+
+| `kind` | When to use |
+|---|---|
+| `llm.generation` | Any LLM text generation call |
+| `llm.embedding` | Embedding / vectorisation call |
+| `tool.call` | External tool or API call |
+| `tool.search` | Vector / full-text search |
+| `workflow.phase` | A named phase or stage of a multi-step workflow |
+| `guardrail.check` | A guardrail or safety evaluation (use child span pattern above) |
 
 ---
 
@@ -924,67 +862,123 @@ When requesting support, provide:
 
 ### Authentication
 
-All requests require:
+All `/v1/*` endpoints require:
 ```
 X-API-Key: <your-api-key>
-Content-Type: application/json
 ```
 
-### Core Endpoints
+`GET /health` does **not** require authentication.
+
+### Core endpoints
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| `PUT` | `/v1/prompts/{name}` | Create/update prompt |
-| `GET` | `/v1/prompts/{name}` | Get prompt details |
-| `GET` | `/v1/prompts/{name}/versions` | List prompt versions |
-| `POST` | `/v1/executions:run` | Synchronous execution |
-| `POST` | `/v1/executions:submit` | Async execution |
-| `GET` | `/v1/executions/{id}` | Get execution status |
-| `GET` | `/v1/traces/{trace_id}/summary` | Get workflow summary |
-| `GET` | `/v1/traces/{trace_id}/tree` | Get workflow tree |
-| `GET` | `/v1/analytics/prompts` | Get prompt analytics |
-| `GET` | `/health` | Health check |
+|---|---|---|
+| `GET` | `/health` | Health check (no auth) |
+| `PUT` | `/v1/prompts/{name}` | Create or update a prompt (Mode 1) |
+| `GET` | `/v1/prompts/{name}` | Get prompt with active version |
+| `GET` | `/v1/prompts/{name}/versions` | List all versions |
+| `POST` | `/v1/executions:run` | Synchronous LLM execution (Mode 1) |
+| `POST` | `/v1/executions:submit` | Async LLM execution (Mode 1) |
+| `GET` | `/v1/executions/{id}` | Poll execution status |
+| `POST` | `/v1/prompts/register-code` | Register code prompts (Mode 2) |
+| `POST` | `/v1/spans` | Ingest a span from a client (Mode 2) |
+| `GET` | `/v1/traces/{trace_id}` | Full trace tree with parent/child hierarchy |
+| `GET` | `/v1/traces/{trace_id}/summary` | Aggregated cost and token summary |
+| `GET` | `/v1/analytics/prompts` | Prompt execution analytics (both modes) |
+| `GET` | `/v1/analytics/agents` | Cross-trace agent analytics |
 
-### Execution Request Schema
+### `POST /v1/prompts/register-code`
 
 ```json
 {
-  "prompt_name": "string (required)",
-  "environment": "string (default: 'dev')",
-  "variables": {"key": "value"},
+  "prompts": [
+    {
+      "name": "paper_agent.extraction",
+      "template_source": "...",
+      "template_hash": "<sha256>",
+      "description": "...",
+      "owner_team": "..."
+    }
+  ],
+  "dry_run": false
+}
+```
+
+Response:
+```json
+{
+  "registered": 1,
+  "updated": 0,
+  "unchanged": 1,
+  "dry_run": false,
+  "details": [
+    {"name": "paper_agent.extraction", "action": "new",       "hash_changed": true},
+    {"name": "paper_agent.synthesis",  "action": "unchanged", "hash_changed": false}
+  ]
+}
+```
+
+### `POST /v1/spans`
+
+Required fields: `trace_id`, `name`, `kind`, `start_time`, `status`
+
+```json
+{
+  "trace_id": "trace-abc123",
+  "parent_span_id": null,
+  "agent_id": "researcher",
+  "name": "paper_agent.extraction",
+  "kind": "llm.generation",
+  "start_time": "2026-03-17T10:00:00.000Z",
+  "duration_ms": 1250,
+  "status": "ok",
+  "model": "claude-haiku-4-5-20251001",
+  "prompt_tokens": 312,
+  "completion_tokens": 87,
+  "prompt_name": "paper_agent.extraction",
+  "input_data": {"title": "..."},
+  "attributes": {}
+}
+```
+
+Response: `{"span_id": "<uuid>"}`
+
+### `GET /v1/traces/{trace_id}/summary`
+
+```json
+{
+  "trace_id": "trace-abc123",
+  "span_count": 3,
+  "total_prompt_tokens": 850,
+  "total_completion_tokens": 210,
+  "total_cost": 0.0023,
+  "cost_breakdown": [
+    {"span_name": "paper_agent.extraction", "cost": 0.0015, "provider": "anthropic"},
+    {"span_name": "newsletter_synthesis",   "cost": 0.0008, "provider": "anthropic"}
+  ],
+  "duration_ms": 3100
+}
+```
+
+`total_cost` is `null` (not `0.00`) when any span uses an unrecognised model name.
+
+### `POST /v1/executions:run` — Mode 1 with Anthropic
+
+```json
+{
+  "prompt_name": "doc_summarizer",
+  "variables": {"text": "..."},
   "model": {
-    "provider": "openai",
-    "model_name": "gpt-4o-mini"
+    "provider": "anthropic",
+    "model_name": "claude-haiku-4-5-20251001"
   },
   "params": {
-    "max_new_tokens": 800,
-    "temperature": 0.7,
-    "top_p": 0.9
-  },
-  "trace_id": "string (optional)",
-  "parent_span_id": "string (optional)",
-  "span_name": "string (optional)",
-  "span_kind": "string (optional)"
+    "max_new_tokens": 512,
+    "temperature": 0.2
+  }
 }
 ```
 
 ---
 
-## Next Steps
-
-1. **Set up development environment**: Follow [Quick Start Integration](#quick-start-integration)
-2. **Choose your integration mode**: [Full Management vs Code-Based](#integration-patterns)
-3. **Implement workflow tracking**: [Agentic Applications](#workflow-tracking-for-agentic-applications)
-4. **Prepare for production**: [Production Deployment](#production-deployment)
-
-### Additional Resources
-
-- [README.md](README.md) - Project overview and quick start
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Technical architecture details
-- [PromptLedger Spec.md](PromptLedger%20Spec.md) - Full API specification
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-
----
-
-*Last Updated: February 2026*
-*Integration Guide Version: 1.0*
+*Last updated: March 2026 — Epic 1 (Stories 1.0–1.4, 1.6)*

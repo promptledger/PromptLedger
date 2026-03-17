@@ -4,6 +4,51 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-17] - Story 1.6: Code-Based Tracking Integration Guide (Epic 1)
+
+### Summary
+- Full rewrite of `INTEGRATION_GUIDE.md` — replaces the one-paragraph Mode 2 section with
+  7 canonical sections targeting non-OpenAI, developer-owned projects
+- Updated `README.md` — removed stale fake Python client API, updated Features list to
+  reflect Epic 1 state, updated Roadmap, replaced Mode 2 example with real API calls
+
+### Sections added / rewritten
+1. **When to Choose Mode 2** — concrete decision guide; explicit call-out that any
+   unsupported LLM provider makes Mode 2 the right choice
+2. **End-to-End Mode 2 Walkthrough** — full example: `pip install promptledger-client`,
+   startup registration, Anthropic call wrapping with `log_span()`, multi-step workflow
+   with `start_trace()` / `current_trace_id()`, `tracker=None` test isolation
+3. **CI/CD Dry-Run Recipe** — GitHub Actions step + Python validation script using
+   `dry_run: true`; exits non-zero when unregistered prompt changes are detected
+4. **Graceful Degradation Pattern** — `PROMPTLEDGER_API_URL` absent → zero imports,
+   all application code continues; `tracker=None` no-op pattern
+5. **Async Patterns — contextvars Isolation** — the `asyncio.gather()` footgun explained;
+   correct pattern: pass `parent_span_id` explicitly, rely on contextvars only for
+   `trace_id` reading (not writing)
+6. **Stateless Span-Passing for Workflow Engines** — canonical state-object pattern for
+   serverless / Celery / workflow steps that cross process boundaries
+7. **Guardrail Alert Pattern** — child spans with `kind="guardrail.check"`, one span per
+   alert, `attributes` with `alert_type` / `severity` / `flagged_text` / `source_evidence`
+- API Reference updated: correct endpoints, `POST /v1/spans` shape, trace summary shape,
+  `total_cost: null` semantics, `kind` values reference table
+
+### Decisions
+- Code samples use `promptledger-client` SDK (`AsyncPromptLedgerClient`, `SpanPayload`,
+  `RegistrationPayload`) — Story 1.2 SDK will match this interface
+- Anthropic used as the primary Mode 2 example (the driving use case for Epic 1)
+- `tracker=None` injection pattern is the canonical test isolation approach
+- Guardrail pattern: multiple violations → multiple child spans (one per alert), not one
+  span with a list in attributes — preserves queryability
+
+### Issues & Resolution
+- None — documentation-only story
+
+### Next Steps
+- [ ] Story 1.2: Python SDK (`promptledger-client`) — implement `AsyncPromptLedgerClient`,
+  `SpanPayload`, `RegistrationPayload`, `context.py` to match this guide's examples
+
+---
+
 ## [2026-03-17] - Fix spans POST 405: trailing slash route mismatch
 
 ### Summary

@@ -7,7 +7,7 @@ As GenAI applications scale, prompts become scattered across code, notebooks,
 configs, and experiments—making them hard to govern, reproduce, and audit.
 PromptLedger provides a centralized control plane for managing prompt versions,
 executions, and lineage, giving teams observability and governance without
-slowing down development.   
+slowing down development.
 
 📖 Background: [The Hidden Crisis of Prompt Sprawl](<https://medium.com/@martin_rodek/the-hidden-crisis-of-prompt-sprawl-and-how-to-fix-it-9b5e65cd10fc>)
 
@@ -16,39 +16,33 @@ slowing down development.
 
 - **Dual-Mode Prompt Management**: Full database management OR code-based tracking with automatic versioning
 - **Workflow Execution Tracking**: OpenTelemetry-style spans for tracing multi-step agentic workflows
-- **Prompt Registry**: Content-based versioning with deduplication
-- **Multi-provider Execution**: OpenAI support with extensible adapter interface
+- **Prompt Registry**: Content-based versioning with SHA-256 deduplication
+- **Multi-Provider Execution**: OpenAI and Anthropic adapters with extensible factory pattern
+- **Span Ingestion API**: `POST /v1/spans` for Mode 2 clients to report LLM calls directly
+- **Multi-Provider Cost Model**: YAML-backed pricing table with fnmatch glob matching; `total_cost` in analytics and trace summaries
+- **Python SDK**: `pip install promptledger-client` — `AsyncPromptLedgerClient`, contextvars trace helpers, Pydantic models
+- **Dry-Run Registration**: `POST /v1/prompts/register-code` with `dry_run: true` for CI/CD validation
 - **Async-first Design**: Redis + Celery for production workloads
 - **Full Lineage**: Complete execution tracking and parent-child relationships in Postgres
-- **Deterministic Reproducibility**: Prompt → Version → Execution → Span traceability
-- **Git Integration**: Automatic version detection for code-based prompts
-- **Unified API**: Same interface regardless of prompt management approach
-- **External Call Logging**: Track LLM calls made outside PromptLedger for complete visibility
+- **API Key Auth**: `X-API-Key` header enforced on all `/v1/*` endpoints
 
 ## Architecture
 
 ```
 Client (Agentic Workflow)
   │
-  ▼
+  ├─► Mode 1: POST /v1/executions:run ──► Provider Adapter (OpenAI / Anthropic)
+  │                                              │
+  │                                              ▼
+  │                                       Results + Telemetry → Postgres
+  │
+  └─► Mode 2: POST /v1/spans ──────────► Postgres (spans, traces)
+              (client calls LLM directly)
+
 Prompt Registry & Execution API (FastAPI)
-  │           │
-  │           ├── Registry ops → Postgres (prompts, versions)
-  │           │
-  │           ├── Span tracking → Postgres (traces, parent-child)
-  │           │
-  │           └── Submit execution → Redis (Celery)
-  │
-  ▼
-Worker Pool (Celery)
-  │
-  └── Provider Adapter (OpenAI)
-           │
-           ▼
-        OpenAI API
-           │
-           ▼
-  Results + Telemetry → Postgres (executions, spans)
+  ├── Registry ops   → Postgres (prompts, versions)
+  ├── Span tracking  → Postgres (traces, parent-child tree)
+  └── Submit async   → Redis → Celery Worker → Provider Adapter
 ```
 
 ## Quick Start
@@ -188,253 +182,95 @@ curl -X GET "http://localhost:8000/v1/executions/{execution_id}" \
   -H "X-API-Key: dev-key-change-in-production"
 ```
 
-## Workflow Execution Tracking
+## Workflow Execution Tracking (Mode 2)
 
-PromptLedger provides OpenTelemetry-style workflow tracking to trace and correlate executions across multi-step agentic workflows. This enables debugging, cost attribution, and compliance auditing for complex LLM applications.
-
-### Core Concepts
-
-- **Trace**: A collection of spans representing a single workflow execution from start to finish
-- **Span**: A single operation within a trace (prompt execution, tool call, retrieval, guardrail check)
-- **trace_id**: Groups all spans in one workflow run
-- **parent_span_id**: Creates parent-child relationships for nested operations
-
-### Tracking a Multi-Step Workflow
+For teams that call LLM providers directly, use `POST /v1/spans` to report each call
+and `GET /v1/traces/{trace_id}/summary` to view aggregated cost and token usage.
 
 ```python
-from prompt_ledger import PromptLedger
-import uuid
+import os, time, anthropic, httpx
+from datetime import datetime, timezone
 
-ledger = PromptLedger()
+API_URL = os.environ["PROMPTLEDGER_API_URL"]
+HEADERS = {"X-API-Key": os.environ["PROMPTLEDGER_API_KEY"]}
 
-# Generate a trace_id for this workflow run
-trace_id = str(uuid.uuid4())
+trace_id = "trace-my-workflow-001"
 
-# Step 1: RAG Retrieval (create root span)
-retrieval_result = ledger.execute(
-    "document_retrieval",
-    variables={"query": "What is our PTO policy?"},
-    trace_id=trace_id,
-    span_name="rag_retrieval",
-    span_kind="retrieval"
+# Your application calls the LLM directly
+client = anthropic.Anthropic()
+start = time.time()
+response = client.messages.create(
+    model="claude-haiku-4-5-20251001",
+    max_tokens=512,
+    messages=[{"role": "user", "content": "Summarize this paper: ..."}],
 )
-retrieval_span_id = retrieval_result["span_id"]
+duration_ms = int((time.time() - start) * 1000)
 
-# Step 2: Response Generation (child of retrieval)
-generation_result = ledger.execute(
-    "policy_response",
-    variables={
-        "query": "What is our PTO policy?",
-        "context": retrieval_result["output"]
+# Report the span to PromptLedger
+httpx.post(
+    f"{API_URL}/v1/spans",
+    headers=HEADERS,
+    json={
+        "trace_id": trace_id,
+        "name": "paper_agent.extraction",
+        "kind": "llm.generation",
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "duration_ms": duration_ms,
+        "status": "ok",
+        "model": "claude-haiku-4-5-20251001",
+        "prompt_tokens": response.usage.input_tokens,
+        "completion_tokens": response.usage.output_tokens,
+        "prompt_name": "paper_agent.extraction",
     },
-    trace_id=trace_id,
-    parent_span_id=retrieval_span_id,
-    span_name="response_generation",
-    span_kind="llm"
-)
-generation_span_id = generation_result["span_id"]
-
-# Step 3: Grounding Guardrail (child of generation)
-guardrail_result = ledger.execute(
-    "grounding_check",
-    variables={
-        "response": generation_result["output"],
-        "source_docs": retrieval_result["output"]
-    },
-    trace_id=trace_id,
-    parent_span_id=generation_span_id,
-    span_name="grounding_guardrail",
-    span_kind="guardrail"
 )
 
-# Get complete workflow trace
-trace = ledger.get_trace(trace_id)
-print(f"Total workflow duration: {trace['duration_ms']}ms")
-print(f"Total tokens used: {trace['total_tokens']}")
-print(f"Total cost: ${trace['total_cost']}")
-
-# Get execution tree
-tree = ledger.get_trace_tree(trace_id)
-for span in tree:
-    indent = "  " * span["depth"]
-    print(f"{indent}{span['name']}: {span['duration_ms']}ms")
+# View aggregated cost for the trace
+summary = httpx.get(f"{API_URL}/v1/traces/{trace_id}/summary", headers=HEADERS).json()
+print(f"Total cost: ${summary['total_cost']}")
+print(f"Tokens: {summary['total_prompt_tokens']} in / {summary['total_completion_tokens']} out")
 ```
 
-### Logging External LLM Calls
+See [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) for the full Mode 2 walkthrough,
+including the `promptledger-client` SDK, `contextvars` trace propagation,
+CI/CD dry-run recipe, and the guardrail alert pattern.
 
-Track LLM calls made directly to providers (outside PromptLedger) for complete workflow visibility:
+## Dual-Mode Prompt Management
 
-```python
-# Your application makes a direct OpenAI call
-import openai
-response = openai.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Analyze this data..."}]
-)
+| | Mode 1 — Full Management | Mode 2 — Code-Based Tracking |
+|---|---|---|
+| Prompts live in | PromptLedger database | Your code / Git |
+| LLM calls made by | PromptLedger execution engine | Your application |
+| Provider support | OpenAI, Anthropic | Any provider |
+| Best for | Non-technical editors, A/B tests | Developer-owned, Git-first |
 
-# Log it to PromptLedger for tracking
-ledger.log_external_span(
-    trace_id=trace_id,
-    parent_span_id=parent_span_id,
-    name="direct_openai_analysis",
-    kind="llm",
-    input_data={"messages": [...]},
-    output_data={"response": response.choices[0].message.content},
-    model="gpt-4",
-    prompt_tokens=response.usage.prompt_tokens,
-    completion_tokens=response.usage.completion_tokens,
-    duration_ms=450
-)
-```
-
-### Workflow Analytics
+### Mode 1 quick example
 
 ```bash
-# Get trace summary
-curl -X GET "http://localhost:8000/v1/traces/{trace_id}/summary" \
-  -H "X-API-Key: dev-key-change-in-production"
+# Create a prompt
+curl -X PUT "$API_URL/v1/prompts/doc_summarizer" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"template_source":"Summarize:\n{{text}}","set_active":true}'
 
-# Get trace tree
-curl -X GET "http://localhost:8000/v1/traces/{trace_id}/tree" \
-  -H "X-API-Key: dev-key-change-in-production"
-
-# Get all spans in a trace
-curl -X GET "http://localhost:8000/v1/traces/{trace_id}/spans" \
-  -H "X-API-Key: dev-key-change-in-production"
+# Execute it (PromptLedger calls the LLM)
+curl -X POST "$API_URL/v1/executions:run" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"prompt_name":"doc_summarizer","variables":{"text":"..."},
+       "model":{"provider":"anthropic","model_name":"claude-haiku-4-5-20251001"}}'
 ```
 
-### Use Cases
+### Mode 2 quick example
 
-**Debugging Failed Workflows**
-- Identify which step in a multi-step workflow caused a failure
-- See exact inputs and outputs at each step
-- Compare successful vs failed workflow runs
+```bash
+# Register code prompts (idempotent, content-based versioning)
+curl -X POST "$API_URL/v1/prompts/register-code" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"prompts":[{"name":"summarizer","template_source":"Summarize: {{text}}",
+       "template_hash":"<sha256>"}]}'
 
-**Cost Attribution**
-- Aggregate token costs across all steps in a workflow
-- Identify expensive operations for optimization
-- Track costs by workflow type or user
-
-**Compliance & Auditing**
-- Complete audit trail of all operations in a workflow
-- Prove that guardrails were executed before responses
-- Reconstruct decision chains for regulatory requirements
-
-**Performance Optimization**
-- Identify bottleneck steps in workflows
-- Measure end-to-end latency across workflow runs
-- Optimize parallel vs sequential execution patterns
-
-## Dual-Mode Usage Patterns
-
-Prompt Ledger supports two distinct approaches to prompt management:
-
-### Mode 1: Full Management (Database-First)
-
-**Best for**: Marketing teams, dynamic content, non-technical users
-
-```python
-from prompt_ledger import PromptLedger
-
-# Initialize in full management mode
-ledger = PromptLedger(mode="full")
-
-# Create and manage prompts via API
-ledger.create_prompt(
-    name="welcome_email",
-    template="Hello {{name}}, welcome to {{company}}!",
-    description="Welcome message for new users"
-)
-
-# Execute prompts
-result = ledger.execute("welcome_email", {
-    "name": "Sarah",
-    "company": "Acme Corp"
-})
-
-# Update prompts dynamically
-ledger.update_prompt("welcome_email",
-    "🎉 Hello {{name}}, welcome to {{company}}! We're excited to have you!")
-```
-
-### Mode 2: Code-Based Tracking (Git-First)
-
-**Best for**: Developer teams, version control, stable prompts
-
-```python
-# my_app/prompts.py
-class Prompts:
-    WELCOME = "Hello {{name}}, welcome to {{app}}!"
-    ORDER_CONFIRMATION = "Order {{order_id}} is confirmed!"
-    ERROR_MESSAGE = "Error: {{error}} - Please contact support."
-
-    @classmethod
-    def get_template(cls, name):
-        return getattr(cls, name)
-
-# my_app/main.py
-from prompt_ledger import PromptLedger
-from my_app.prompts import Prompts
-
-# Initialize in tracking mode
-ledger = PromptLedger(
-    mode="tracking_only",
-    code_registry=Prompts.get_template
-)
-
-# Register code prompts (detects changes automatically)
-response = ledger.register_code_prompts([
-    "WELCOME",
-    "ORDER_CONFIRMATION",
-    "ERROR_MESSAGE"
-])
-
-print(f"Registered {len(response['registered'])} prompts")
-for prompt in response['registered']:
-    print(f"  {prompt['name']}: v{prompt['version']} ({prompt['mode']})")
-
-# Execute with automatic tracking
-result = ledger.execute("WELCOME", {
-    "name": "John",
-    "app": "MyApp"
-})
-
-# Get unified analytics (works for both modes)
-analytics = ledger.get_analytics(mode="all")
-print(f"Total executions: {analytics['summary']['total_executions']}")
-print(f"Full mode: {analytics['by_mode']['full']['execution_count']}")
-print(f"Tracking mode: {analytics['by_mode']['tracking']['execution_count']}")
-
-# Get prompt history (works for both modes)
-history = ledger.get_prompt_history("WELCOME", mode="tracking")
-print(f"Current version: {history['current_version']}")
-for version in history['versions']:
-    print(f"v{version['version']}: {version['execution_count']} executions")
-```
-
-### Choosing the Right Mode
-
-| Factor | Full Management | Code-Based Tracking |
-|--------|----------------|-------------------|
-| **Team** | Mixed technical/non-technical | Developer-focused |
-| **Update Frequency** | High, dynamic changes | Low, stable templates |
-| **Version Control** | Database-managed | Git-based |
-| **Testing** | Runtime testing | Unit test friendly |
-| **Deployment** | No code changes needed | Code deployment required |
-| **Analytics** | Full prompt lifecycle | Usage tracking only |
-
-### Migration Between Modes
-
-```python
-# Start with tracking, migrate to full management
-ledger = PromptLedger(mode="tracking_only")
-# ... develop prompts in code ...
-
-# When ready for dynamic management:
-ledger.migrate_to_full_mode([
-    ("WELCOME", Prompts.WELCOME),
-    ("ORDER_CONFIRMATION", Prompts.ORDER_CONFIRMATION)
-])
+# Dry-run to check for unregistered changes (CI/CD gate)
+curl -X POST "$API_URL/v1/prompts/register-code" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"prompts":[...],"dry_run":true}'
 ```
 
 ## Configuration
@@ -554,21 +390,21 @@ MIT License - see LICENSE file for details.
 
 ## Roadmap
 
-### Recently Completed ✅
-- [x] Dual-mode prompt management (full vs tracking)
-- [x] Workflow execution tracking with OpenTelemetry-style spans
-- [x] Parent-child relationship tracking for nested operations
-- [x] External LLM call logging
-- [x] Unified analytics across modes and workflows
+### Epic 1 — Integration Enhancements ✅ (in progress)
+- [x] Story 1.0 — API key auth (`X-API-Key` enforced on all `/v1/*` endpoints)
+- [x] Story 1.1 — Anthropic provider adapter (`claude-haiku-4-5-*`, `claude-sonnet-4-6*`, `claude-opus-4-6*`)
+- [x] Story 1.3 — `register-code` dry-run and change detection
+- [x] Story 1.4 — Multi-provider cost model (YAML pricing table, `total_cost` in analytics)
+- [x] Story 1.6 — Code-Based Tracking integration guide (this section)
+- [ ] Story 1.2 — Official Python SDK (`pip install promptledger-client`)
+- [ ] Story 1.7 — Span ingestion API (`POST /v1/spans`, `GET /v1/traces/{id}/summary`)
 
-### Planned Features
-- [ ] Multi-provider support (Anthropic, Google, Cohere, etc.)
+### Epic 2 — Namespacing (deferred)
+- [ ] Project namespacing and multi-tenant API keys
+
+### Longer term
 - [ ] OpenTelemetry export integration
 - [ ] RBAC and team-based access control
 - [ ] Evaluation and A/B testing framework
-- [ ] Advanced cost tracking and budgeting dashboards
-- [ ] Prompt optimization suggestions based on execution data
 - [ ] Web dashboard and real-time analytics
-- [ ] Multi-tenancy support
 - [ ] Trace comparison and anomaly detection
-- [ ] Workflow templates and best practices library
