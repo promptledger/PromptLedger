@@ -887,6 +887,41 @@ X-API-Key: <your-api-key>
 | `GET` | `/v1/analytics/prompts` | Prompt execution analytics (both modes) |
 | `GET` | `/v1/analytics/agents` | Cross-trace agent analytics |
 
+### `POST /v1/executions:run` — synchronous execution response
+
+```json
+{
+  "execution_id": "<uuid>",
+  "status": "succeeded",
+  "mode": "sync",
+  "response_text": "...",
+  "telemetry": {
+    "prompt_tokens": 312,
+    "response_tokens": 87,
+    "latency_ms": 1240,
+    "model_name": "claude-haiku-4-5-20251001",
+    "provider": "anthropic",
+    "total_cost": 0.00062
+  }
+}
+```
+
+`total_cost` is `null` (not `0.00`) when the model name is not in the pricing table.
+
+### `POST /v1/executions:submit` — async submission response
+
+```json
+{
+  "execution_id": "<uuid>",
+  "status": "queued",
+  "mode": "async",
+  "model_name": "gpt-4o-mini",
+  "provider": "openai"
+}
+```
+
+Poll `GET /v1/executions/{execution_id}` for the full telemetry once the execution completes.
+
 ### `POST /v1/prompts/register-code`
 
 ```json

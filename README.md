@@ -396,6 +396,7 @@ MIT License - see LICENSE file for details.
 - [x] Story 1.3 — `register-code` dry-run and change detection
 - [x] Story 1.4 — Multi-provider cost model (YAML pricing table, `total_cost` in analytics)
 - [x] Story 1.6 — Code-Based Tracking integration guide (this section)
+- [x] Story 1.8 — Execution telemetry (`model_name`, `provider`, `total_cost` in execution responses)
 - [ ] Story 1.2 — Official Python SDK (`pip install promptledger-client`)
 - [ ] Story 1.7 — Span ingestion API (`POST /v1/spans`, `GET /v1/traces/{id}/summary`)
 

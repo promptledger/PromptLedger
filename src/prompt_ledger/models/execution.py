@@ -82,6 +82,7 @@ class Execution(Base):
     prompt_tokens = Column(Integer)
     response_tokens = Column(Integer)
     latency_ms = Column(Integer)
+    model_name = Column(String(100))
     error_type = Column(String(100))
     error_message = Column(Text)
 

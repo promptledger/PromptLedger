@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from prompt_ledger.models.execution import Execution, ExecutionInput
 from prompt_ledger.models.model import Model
 from prompt_ledger.models.prompt import Prompt, PromptVersion
+from prompt_ledger.services.pricing import PricingTable
 from prompt_ledger.services.providers import ProviderAdapterFactory
+
+_pricing_table = PricingTable.default()
 
 
 class ExecutionService:
@@ -71,6 +74,12 @@ class ExecutionService:
 
         await self.db.commit()
 
+        total_cost = _pricing_table.calculate_cost(
+            model.model_name,
+            execution.prompt_tokens,
+            execution.response_tokens,
+        )
+
         return {
             "execution_id": str(execution.execution_id),
             "status": execution.status,
@@ -80,6 +89,9 @@ class ExecutionService:
                 "prompt_tokens": execution.prompt_tokens,
                 "response_tokens": execution.response_tokens,
                 "latency_ms": execution.latency_ms,
+                "model_name": model.model_name,
+                "provider": model.provider,
+                "total_cost": total_cost,
             },
         }
 
@@ -119,6 +131,8 @@ class ExecutionService:
             "execution_id": str(execution.execution_id),
             "status": execution.status,
             "mode": execution.execution_mode,
+            "model_name": model.model_name,
+            "provider": model.provider,
         }
 
     async def _resolve_execution_context(
@@ -202,6 +216,7 @@ class ExecutionService:
             prompt_id=prompt.prompt_id,
             version_id=version.version_id,
             model_id=model.model_id,
+            model_name=model.model_name,
             environment=request.get("environment", "dev"),
             execution_mode=mode,
             status="queued" if mode == "async" else "running",

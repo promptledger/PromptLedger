@@ -4,6 +4,34 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-17] - Story 1.8: Execution Telemetry Enhancement
+
+### Summary
+- `model_name` column added to `executions` table (migration `b2c3d4e5f6a7`)
+- `Execution` ORM updated with `model_name = Column(String(100), nullable=True)`
+- `ExecutionService._create_execution` sets `model_name=model.model_name`
+- `ExecutionService.execute_sync` response `telemetry` now includes `model_name`, `provider`, `total_cost`
+- `ExecutionService.submit_async` response now includes `model_name`, `provider`
+- `GET /v1/executions/{id}` telemetry includes `model_name`, `provider`, `total_cost`
+- `GET /v1/executions/` list entries include `model_name`
+- `PricingTable` wired into executions endpoint for per-execution `total_cost`
+- Tests: 4 unit tests (`test_execution_model_tracking.py`) GREEN; 6 integration tests (`test_execution_telemetry.py`) require Docker
+- Docs: INTEGRATION_GUIDE.md API Reference updated with Mode 1 execution response schema; README roadmap updated
+
+### Decisions
+- `model_name` stored denormalized on `executions` row (alongside the `model_id` FK) so the list endpoint doesn't need an extra JOIN and historical data is preserved if the model record changes
+- `total_cost` computed at read time via `PricingTable.calculate_cost()` — not persisted; ensures pricing updates apply retroactively
+- `provider` read from the `Model` relationship in `get_execution` (eager-loaded); read from `Model` object in `execute_sync` response
+
+### Issues & Resolution
+- None
+
+### Next Steps
+- [ ] Story 1.2 — Official Python SDK (`promptledger-client`)
+- [ ] Story 1.7 — Span ingestion API (`POST /v1/spans`, `GET /v1/traces/{id}/summary`)
+
+---
+
 ## [2026-03-17] - Hotfix: extend provider_name enum to include 'anthropic'
 
 ### Summary

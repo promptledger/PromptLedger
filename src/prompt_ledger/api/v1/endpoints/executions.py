@@ -13,7 +13,10 @@ from prompt_ledger.models.execution import Execution, ExecutionInput
 from prompt_ledger.models.model import Model
 from prompt_ledger.models.prompt import Prompt, PromptVersion
 from prompt_ledger.services.execution import ExecutionService
+from prompt_ledger.services.pricing import PricingTable
 from prompt_ledger.services.providers import ProviderAdapterFactory
+
+_pricing_table = PricingTable.default()
 
 router = APIRouter()
 
@@ -91,10 +94,22 @@ async def get_execution(
 
     # Include telemetry if available
     if execution.prompt_tokens is not None:
+        model_name = execution.model_name or (
+            execution.model.model_name if execution.model else None
+        )
+        provider = execution.model.provider if execution.model else None
+        total_cost = _pricing_table.calculate_cost(
+            model_name,
+            execution.prompt_tokens,
+            execution.response_tokens,
+        )
         response["telemetry"] = {
             "prompt_tokens": execution.prompt_tokens,
             "response_tokens": execution.response_tokens,
             "latency_ms": execution.latency_ms,
+            "model_name": model_name,
+            "provider": provider,
+            "total_cost": total_cost,
         }
 
     return response
@@ -137,6 +152,7 @@ async def list_executions(
                 "prompt_name": exec.prompt.name if exec.prompt else None,
                 "status": exec.status,
                 "mode": exec.execution_mode,
+                "model_name": exec.model_name,
                 "created_at": exec.created_at.isoformat(),
                 "completed_at": exec.completed_at.isoformat()
                 if exec.completed_at
