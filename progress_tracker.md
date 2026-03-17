@@ -4,6 +4,35 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-16] - Story 1.4: Multi-Provider Cost Model (Epic 1)
+
+### Summary
+- New file: `pricing.yaml` (repo root) — YAML pricing table, 5 rows covering Anthropic and OpenAI models as of 2026-03
+- New file: `src/prompt_ledger/services/pricing.py` — `PricingTable` class; fnmatch glob matching, provider inference from model name, `calculate_cost()` returns `None` for unknown models
+- Updated: `src/prompt_ledger/api/v1/endpoints/analytics.py` — added `total_cost` field to both mode-specific and all-mode responses; computed via `_cost_by_mode()` helper that joins Execution → Model, groups by model_name, applies pricing in Python
+- Tests: `tests/unit/test_pricing.py` (17 tests — 100% GREEN); `tests/integration/test_analytics_cost.py` (6 tests — require Docker)
+- No migration needed — provider inferred from model name via glob, no schema changes
+
+### Decisions
+- YAML-backed pricing table (not DB-backed): avoids migration + admin endpoint; operators can override via `PRICING_YAML_PATH` env var (Docker volume or Railway config)
+- Module-level `_pricing_table` singleton in analytics.py: loaded once at import, not per-request
+- `total_cost: null` (not `0.00`) for unknown models: callers can distinguish "unknown" from "zero"
+- `total_cost: 0.0` when there are no executions: zero is a known state (no cost incurred)
+- Mixed-model traces (some unknown): total_cost = null, per-span entries still show individual costs
+- gpt-4o-mini* pattern comes before gpt-4o* in pricing.yaml: preserves correct first-match semantics since fnmatch("gpt-4o-mini", "gpt-4o*") would be True
+
+### Issues & Resolution
+- None — clean implementation
+
+### Lessons Learned
+- fnmatch ordering is load-bearing: more-specific patterns must precede less-specific ones in the YAML
+
+### Next Steps
+- [ ] Story 1.1: Anthropic provider adapter — AnthropicAdapter in providers.py, cost calculation will work automatically via PricingTable glob matching
+- [ ] Story 1.7: Span ingestion API — /v1/spans and /v1/traces/{id}/summary; use PricingTable for per-span cost_breakdown
+
+---
+
 ## [2026-02-03] - Automatic Model Seeding on API Startup
 
 ### Summary
