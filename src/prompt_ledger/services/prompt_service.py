@@ -25,37 +25,17 @@ class PromptService:
         self.db = db
 
     async def register_code_prompts(
-        self, prompts: List[Dict[str, Any]]
+        self, prompts: List[Dict[str, Any]], dry_run: bool = False
     ) -> List[Dict[str, Any]]:
         """Register code-based prompts with automatic versioning.
 
-        This method implements automatic version detection based on template
-        content checksums. If the template hasn't changed, the existing version
-        is returned. If changed, a new version is created with an incremented
-        version number.
-
         Args:
-            prompts: List of prompt data dictionaries containing:
-                - name: Prompt identifier (str)
-                - template_source: Jinja2 template (str)
-                - template_hash: SHA256 hash of template (str, optional)
+            prompts: List of prompt data dicts with 'name' and 'template_source'.
+            dry_run: If True, compute results without writing to the database.
 
         Returns:
-            List of registration result dictionaries containing:
-                - name: Prompt name
-                - mode: Always 'tracking'
-                - version: Version number
-                - change_detected: True if new version created
-                - previous_version: Previous version number (if change detected)
-
-        Example:
-            >>> service = PromptService(db)
-            >>> results = await service.register_code_prompts([
-            ...     {"name": "WELCOME", "template_source": "Hello {{name}}!"}
-            ... ])
-            >>> print(results[0])
-            {'name': 'WELCOME', 'mode': 'tracking', 'version': 1,
-             'change_detected': False, 'previous_version': None}
+            List of result dicts with 'name', 'action', 'hash_changed',
+            'version', 'change_detected', 'previous_version'.
         """
         results = []
 
@@ -64,79 +44,81 @@ class PromptService:
             template_source = prompt_data["template_source"]
             checksum = compute_checksum(template_source)
 
-            # Find or create prompt
             result = await self.db.execute(select(Prompt).where(Prompt.name == name))
             prompt = result.scalar_one_or_none()
 
-            previous_version = None
-            change_detected = False
-
             if not prompt:
-                # Create new prompt in tracking mode
-                prompt = Prompt(name=name, mode="tracking")
-                self.db.add(prompt)
-                await self.db.flush()
+                action = "new"
+                hash_changed = True
+                version_number = 1
+                previous_version = None
+                change_detected = True
 
-                # Create version 1
-                version = PromptVersion(
-                    prompt_id=prompt.prompt_id,
-                    version_number=1,
-                    template_source=template_source,
-                    checksum_hash=checksum,
-                    status="active",
-                )
-                self.db.add(version)
-                await self.db.flush()
-
-                # Set as active version
-                prompt.active_version_id = version.version_id
-
-            else:
-                # Prompt exists - check if checksum already exists
-                result = await self.db.execute(
-                    select(PromptVersion).where(
-                        PromptVersion.prompt_id == prompt.prompt_id,
-                        PromptVersion.checksum_hash == checksum,
-                    )
-                )
-                existing_version = result.scalar_one_or_none()
-
-                if existing_version:
-                    # Content unchanged - return existing version
-                    version = existing_version
-                else:
-                    # Content changed - create new version
-                    result = await self.db.execute(
-                        select(PromptVersion.version_number)
-                        .where(PromptVersion.prompt_id == prompt.prompt_id)
-                        .order_by(PromptVersion.version_number.desc())
-                        .limit(1)
-                    )
-                    max_version = result.scalar_one_or_none()
-                    previous_version = max_version
-                    next_version = (max_version or 0) + 1
+                if not dry_run:
+                    prompt = Prompt(name=name, mode="tracking")
+                    self.db.add(prompt)
+                    await self.db.flush()
 
                     version = PromptVersion(
                         prompt_id=prompt.prompt_id,
-                        version_number=next_version,
+                        version_number=1,
                         template_source=template_source,
                         checksum_hash=checksum,
                         status="active",
                     )
                     self.db.add(version)
                     await self.db.flush()
-
-                    # Update active version
                     prompt.active_version_id = version.version_id
+                    await self.db.commit()
+            else:
+                existing_version_result = await self.db.execute(
+                    select(PromptVersion).where(
+                        PromptVersion.prompt_id == prompt.prompt_id,
+                        PromptVersion.checksum_hash == checksum,
+                    )
+                )
+                existing_version = existing_version_result.scalar_one_or_none()
+
+                if existing_version:
+                    action = "unchanged"
+                    hash_changed = False
+                    version_number = existing_version.version_number
+                    previous_version = None
+                    change_detected = False
+                else:
+                    action = "update"
+                    hash_changed = True
                     change_detected = True
 
-            await self.db.commit()
+                    max_result = await self.db.execute(
+                        select(PromptVersion.version_number)
+                        .where(PromptVersion.prompt_id == prompt.prompt_id)
+                        .order_by(PromptVersion.version_number.desc())
+                        .limit(1)
+                    )
+                    max_version = max_result.scalar_one_or_none()
+                    previous_version = max_version
+                    version_number = (max_version or 0) + 1
+
+                    if not dry_run:
+                        new_version = PromptVersion(
+                            prompt_id=prompt.prompt_id,
+                            version_number=version_number,
+                            template_source=template_source,
+                            checksum_hash=checksum,
+                            status="active",
+                        )
+                        self.db.add(new_version)
+                        await self.db.flush()
+                        prompt.active_version_id = new_version.version_id
+                        await self.db.commit()
 
             results.append(
                 {
                     "name": name,
-                    "mode": "tracking",
-                    "version": version.version_number,
+                    "action": action,
+                    "hash_changed": hash_changed,
+                    "version": version_number,
                     "change_detected": change_detected,
                     "previous_version": previous_version,
                 }

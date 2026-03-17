@@ -71,6 +71,7 @@ async def register_code_prompts(
     """
     service = PromptService(db)
     prompts = request.get("prompts", [])
+    dry_run: bool = bool(request.get("dry_run", False))
 
     if not prompts:
         raise HTTPException(
@@ -78,9 +79,19 @@ async def register_code_prompts(
             detail="No prompts provided. Include 'prompts' array in request body.",
         )
 
-    results = await service.register_code_prompts(prompts)
+    details = await service.register_code_prompts(prompts, dry_run=dry_run)
 
-    return {"registered": results}
+    registered = sum(1 for d in details if d["action"] == "new")
+    updated = sum(1 for d in details if d["action"] == "update")
+    unchanged = sum(1 for d in details if d["action"] == "unchanged")
+
+    return {
+        "registered": registered,
+        "updated": updated,
+        "unchanged": unchanged,
+        "dry_run": dry_run,
+        "details": details,
+    }
 
 
 @router.post("/{name}/execute", response_model=Dict[str, Any])
