@@ -1,3 +1,34 @@
-# promptledger-client 0.0.1 — placeholder
-# Full SDK ships with PromptLedger Epic 1 (v0.1.0)
-__version__ = "0.0.1"
+"""promptledger-client — Python SDK for the PromptLedger API.
+
+Quick start::
+
+    from promptledger_client import AsyncPromptLedgerClient, SpanPayload
+    from promptledger_client.context import start_trace
+
+    client = AsyncPromptLedgerClient(base_url="https://...", api_key="...")
+    trace_id = start_trace()
+    span_id = await client.log_span(SpanPayload(
+        trace_id=trace_id, name="extraction.paper",
+        kind="llm.generation", model="claude-sonnet-4-6",
+        prompt_tokens=412, completion_tokens=198,
+    ))
+"""
+
+from .async_client import AsyncPromptLedgerClient
+from .client import PromptLedgerClient
+from .exceptions import AuthError, NotFoundError, PromptLedgerError
+from .models import RegisterResult, RegistrationPayload, SpanPayload, TraceSummary
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "AsyncPromptLedgerClient",
+    "PromptLedgerClient",
+    "SpanPayload",
+    "RegistrationPayload",
+    "RegisterResult",
+    "TraceSummary",
+    "PromptLedgerError",
+    "AuthError",
+    "NotFoundError",
+]

@@ -1,0 +1,40 @@
+name: Publish promptledger-client to PyPI
+
+on:
+  push:
+    tags:
+      - "client-v*"   # e.g. client-v0.1.0, client-v0.2.0
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build distribution
+        working-directory: client
+        run: python -m build
+
+      - name: Check distribution
+        working-directory: client
+        run: twine check dist/*
+
+      - name: Publish to PyPI
+        working-directory: client
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: twine upload dist/*
