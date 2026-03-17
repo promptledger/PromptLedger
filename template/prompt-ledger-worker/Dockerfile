@@ -19,6 +19,9 @@ COPY src ./src
 # Install the local prompt-ledger package
 RUN pip install --no-cache-dir .
 
+# Copy pricing table
+COPY pricing.yaml .
+
 # Copy the service-specific requirements and install them
 COPY template/prompt-ledger-worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

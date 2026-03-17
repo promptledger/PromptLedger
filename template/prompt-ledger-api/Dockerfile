@@ -27,7 +27,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY alembic.ini .
 COPY alembic ./alembic
 
-# Copy scripts for seeding
+# Copy pricing table and scripts
+COPY pricing.yaml .
 COPY scripts ./scripts
 
 # Copy the startup script
