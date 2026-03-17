@@ -4,6 +4,18 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-17] - Fix spans POST 405: trailing slash route mismatch
+
+### Summary
+- Changed `@spans_router.post("/", ...)` → `@spans_router.post("", ...)` in `endpoints/spans.py`
+- FastAPI does not redirect `POST /v1/spans` to `POST /v1/spans/` — it returns 405. Using `""` (empty string) makes the effective path `/v1/spans` with no trailing slash, matching what the notebook and SDK clients send
+- Commit: `3a60ffe`
+
+### Issues & Resolution
+- Notebook section 4.1 returned 405 on all span POSTs — route registered as `"/"` produced `/v1/spans/`; notebook called `/v1/spans`
+
+---
+
 ## [2026-03-16] - Fix pricing.yaml bundling for Docker/Railway deployments
 
 ### Summary
