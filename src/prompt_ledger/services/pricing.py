@@ -19,8 +19,9 @@ from typing import Optional
 
 import yaml
 
-# Default path: pricing.yaml at the repository root (two levels above this file's package).
-_DEFAULT_PRICING_PATH = Path(__file__).parent.parent.parent.parent / "pricing.yaml"
+# Default path: pricing.yaml bundled inside the prompt_ledger package directory.
+# Works both in editable installs (src/prompt_ledger/) and after pip install (site-packages/prompt_ledger/).
+_DEFAULT_PRICING_PATH = Path(__file__).parent.parent / "pricing.yaml"
 
 # Provider inference: glob patterns applied in order to a model name.
 _PROVIDER_PATTERNS = [

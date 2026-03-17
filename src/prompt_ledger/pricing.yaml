@@ -1,0 +1,41 @@
+# PromptLedger pricing table — Story 1.4
+#
+# Rows are matched in order using fnmatch glob patterns.
+# The first matching row wins.
+# Provider is inferred from model name (see PricingTable.infer_provider).
+#
+# Costs are in USD per 1,000 tokens.
+# Prices as of 2026-03.
+#
+# To override: mount a custom pricing.yaml and set PRICING_YAML_PATH env var.
+
+pricing:
+  - provider: anthropic
+    model_pattern: "claude-haiku-4-5-*"
+    input_cost_per_1k: 0.00080
+    output_cost_per_1k: 0.00400
+    effective_date: "2026-03-01"
+
+  - provider: anthropic
+    model_pattern: "claude-sonnet-4-6*"
+    input_cost_per_1k: 0.00300
+    output_cost_per_1k: 0.01500
+    effective_date: "2026-03-01"
+
+  - provider: anthropic
+    model_pattern: "claude-opus-4-6*"
+    input_cost_per_1k: 0.01500
+    output_cost_per_1k: 0.07500
+    effective_date: "2026-03-01"
+
+  - provider: openai
+    model_pattern: "gpt-4o-mini*"
+    input_cost_per_1k: 0.00015
+    output_cost_per_1k: 0.00060
+    effective_date: "2026-03-01"
+
+  - provider: openai
+    model_pattern: "gpt-4o*"
+    input_cost_per_1k: 0.00250
+    output_cost_per_1k: 0.01000
+    effective_date: "2026-03-01"

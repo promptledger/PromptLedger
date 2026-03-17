@@ -58,6 +58,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+prompt_ledger = ["pricing.yaml"]
+
 [tool.black]
 line-length = 88
 target-version = ['py311']
