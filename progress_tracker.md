@@ -4,6 +4,45 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-18] - Epic 2 Story 2.4: Admin API for project and key management
+
+### Summary
+- **`src/prompt_ledger/api/v1/endpoints/admin.py`** (new) — 5 endpoints: `GET /v1/admin/projects`, `GET /v1/admin/projects/{id}/keys`, `POST /v1/admin/projects`, `POST /v1/admin/projects/{id}/keys`, `DELETE /v1/admin/keys/{id}`
+- **`tests/integration/test_admin.py`** (new) — 23 tests covering all acceptance criteria: 403 on non-default keys, no key material in responses, 409 on system key delete, cache invalidation on revoke, returned keys authenticate, old keys remain valid until revoked
+- **`src/prompt_ledger/api/dependencies.py`** — simplify fixes: corrected misleading docstring (removed "secrets.compare_digest semantics" claim); added `cast(UUID, ...)` to fix 3 pre-existing mypy errors from Story 2.1
+- **`src/prompt_ledger/models/project.py`** — removed redundant `server_default="false"` from `is_system_key` (migration already handles it; ORM now consistent with other Boolean columns in codebase)
+- **`pyproject.toml`** — added `types-cachetools` to dev deps to resolve `[import-untyped]` mypy error
+
+### Decisions
+- Admin router added to main v1 `APIRouter` (gets `verify_api_key` for free); `require_admin_key` adds the default-project check on top — FastAPI deduplicates the `verify_api_key` call so no extra DB round-trip
+- Cache invalidation on `DELETE /v1/admin/keys/{key_id}` is immediate (removes hash from `_key_cache`); TTL still covers the 60s window for other workers if horizontally scaled
+- System keys return 409 Conflict on DELETE with a descriptive message pointing to the env-var rotation path
+- Key generation: `"pl-" + secrets.token_urlsafe(48)` — plaintext returned exactly once, only SHA-256 hash stored
+- `POST /v1/admin/projects` returns 409 on duplicate project name
+
+### Issues & Resolution
+- `admin.py` was already imported in `v1/__init__.py` and `require_admin_key` was already committed to `dependencies.py` by the Story 2.3/2.5 session — but the actual implementation file was never committed, leaving HEAD broken. This commit provides the missing file.
+
+### Next Steps
+- [ ] Run `pytest tests/integration/test_admin.py` with Docker to confirm GREEN
+
+---
+
+## [2026-03-18] - Hotfix: commit missing Epic 2 admin runtime files
+
+### Summary
+- Added `src/prompt_ledger/api/v1/endpoints/admin.py` to the repo so the v1 router import matches what is deployed on GitHub
+- Included the corresponding runtime updates in `src/prompt_ledger/api/dependencies.py` and `src/prompt_ledger/models/project.py`
+
+### Root Cause
+- Local development had the admin endpoint module present, so imports worked in the workspace
+- The file was never committed, but `src/prompt_ledger/api/v1/__init__.py` imports `admin`, so Railway crashed when loading `prompt_ledger.api.main:app` from the GitHub checkout
+
+### Outcome
+- Deployed code and local workspace now match for the Epic 2 admin/auth path
+
+---
+
 ## [2026-03-18] - Hotfix: Epic 2 namespacing migrations seed default project
 
 ### Summary

@@ -1,5 +1,6 @@
 """Shared FastAPI dependencies."""
 
+from typing import cast
 from uuid import UUID
 
 from cachetools import TTLCache
@@ -22,9 +23,8 @@ async def verify_api_key(
 ) -> UUID:
     """Authenticate via DB-backed API key; return the resolved project_id.
 
-    Uses secrets.compare_digest semantics implicitly — the lookup is by hash,
-    so the comparison is a DB equality check on the stored SHA-256 hash, not
-    a string comparison of plaintext keys.
+    The plaintext key is hashed with SHA-256 before any comparison — the DB
+    lookup checks the stored hash, so the plaintext is never persisted.
 
     FastAPI deduplicates dependency calls per request, so declaring this both
     at the router level (for auth enforcement) and on individual endpoints
@@ -39,7 +39,7 @@ async def verify_api_key(
     key_hash = hash_api_key(x_api_key)
 
     if key_hash in _key_cache:
-        return _key_cache[key_hash]
+        return cast(UUID, _key_cache[key_hash])
 
     result = await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
     api_key_row = result.scalar_one_or_none()
@@ -50,7 +50,7 @@ async def verify_api_key(
             detail="Invalid or missing API key",
         )
 
-    project_id: UUID = api_key_row.project_id
+    project_id: UUID = cast(UUID, api_key_row.project_id)
     _key_cache[key_hash] = project_id
     return project_id
 

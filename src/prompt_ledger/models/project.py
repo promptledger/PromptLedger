@@ -44,9 +44,7 @@ class ApiKey(Base):
         nullable=False,
     )
     label = Column(Text, nullable=True)
-    is_system_key = Column(
-        Boolean, nullable=False, default=False, server_default="false"
-    )
+    is_system_key = Column(Boolean, nullable=False, default=False)
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
