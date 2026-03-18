@@ -109,6 +109,98 @@ class TestAnthropicAdapter:
         assert ProviderAdapterFactory._adapters["anthropic"] is AnthropicAdapter
 
 
+class TestAnthropicAdapterSystemMessages:
+    """System messages must be extracted from messages array and passed as system= param."""
+
+    def _make_mock_response(self, text="OK", input_tokens=10, output_tokens=5):
+        response = MagicMock()
+        response.content = [MagicMock(text=text)]
+        response.usage = MagicMock(
+            input_tokens=input_tokens, output_tokens=output_tokens
+        )
+        response.id = "msg_sys_test"
+        return response
+
+    async def test_system_message_extracted_to_system_param(self):
+        """role:system in messages array → system= kwarg, removed from messages."""
+        from prompt_ledger.services.providers import AnthropicAdapter
+
+        mock_response = self._make_mock_response()
+
+        with patch("prompt_ledger.services.providers.AsyncAnthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_cls.return_value = mock_client
+
+            adapter = AnthropicAdapter(api_key="sk-ant-test")
+            await adapter.generate(
+                rendered_prompt=None,
+                model_name="claude-haiku-4-5-20251001",
+                params={"max_tokens": 100},
+                messages=[
+                    {"role": "system", "content": "You are a concise assistant."},
+                    {"role": "user", "content": "Hello"},
+                ],
+            )
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        # system= param set correctly
+        assert call_kwargs["system"] == "You are a concise assistant."
+        # messages array contains only the user turn
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Hello"}]
+        assert not any(m.get("role") == "system" for m in call_kwargs["messages"])
+
+    async def test_no_system_message_no_system_param(self):
+        """When no system message, system= kwarg must not be present."""
+        from prompt_ledger.services.providers import AnthropicAdapter
+
+        mock_response = self._make_mock_response()
+
+        with patch("prompt_ledger.services.providers.AsyncAnthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_cls.return_value = mock_client
+
+            adapter = AnthropicAdapter(api_key="sk-ant-test")
+            await adapter.generate(
+                rendered_prompt=None,
+                model_name="claude-haiku-4-5-20251001",
+                params={"max_tokens": 100},
+                messages=[{"role": "user", "content": "Hello"}],
+            )
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert "system" not in call_kwargs
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Hello"}]
+
+    async def test_multiple_system_messages_joined(self):
+        """Multiple system messages are joined with double newline."""
+        from prompt_ledger.services.providers import AnthropicAdapter
+
+        mock_response = self._make_mock_response()
+
+        with patch("prompt_ledger.services.providers.AsyncAnthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_client.messages.create = AsyncMock(return_value=mock_response)
+            mock_cls.return_value = mock_client
+
+            adapter = AnthropicAdapter(api_key="sk-ant-test")
+            await adapter.generate(
+                rendered_prompt=None,
+                model_name="claude-haiku-4-5-20251001",
+                params={},
+                messages=[
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "system", "content": "Be concise."},
+                    {"role": "user", "content": "Hi"},
+                ],
+            )
+
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["system"] == "You are helpful.\n\nBe concise."
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Hi"}]
+
+
 class TestAnthropicAdapterErrorMapping:
     """API errors must surface as appropriate HTTP status codes."""
 

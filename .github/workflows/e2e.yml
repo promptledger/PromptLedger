@@ -28,4 +28,5 @@ jobs:
         env:
           PROMPTLEDGER_URL: ${{ inputs.promptledger_url }}
           PROMPTLEDGER_API_KEY: ${{ secrets.PROMPTLEDGER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: pytest tests/e2e/ -v --tb=short

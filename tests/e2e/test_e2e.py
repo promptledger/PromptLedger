@@ -9,6 +9,7 @@ Run:
     pytest tests/e2e/ -v
 """
 
+import os
 import uuid
 
 import httpx
@@ -226,3 +227,119 @@ async def test_analytics_agents_endpoint(
     assert resp.status_code == 200
     body = resp.json()
     assert "agents" in body
+
+
+# ---------------------------------------------------------------------------
+# 7. execute() with messages — FR-003
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def require_anthropic_key():
+    """Skip the test if ANTHROPIC_API_KEY is not set in the environment."""
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        pytest.skip("ANTHROPIC_API_KEY not set — skipping Anthropic execute() e2e test")
+
+
+async def test_execute_with_messages_returns_span_id(
+    client: AsyncPromptLedgerClient,
+    base_url: str,
+    api_key: str,
+    require_anthropic_key,
+):
+    """POST /v1/executions/run with messages + span block returns span_id and 200."""
+    trace_id = f"e2e-exec-{uuid.uuid4().hex}"
+    prompt_name = f"e2e.execute.{uuid.uuid4().hex[:8]}"
+
+    await client.register_code_prompts(
+        [
+            RegistrationPayload(
+                name=prompt_name,
+                template_source="You are a concise assistant. {{noop}}",
+            )
+        ]
+    )
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=60,
+    ) as http:
+        resp = await http.post(
+            "/v1/executions/run",
+            json={
+                "prompt_name": prompt_name,
+                "messages": [
+                    {"role": "system", "content": "You are a concise assistant."},
+                    {"role": "user", "content": "Reply with exactly: ok"},
+                ],
+                "model": {
+                    "provider": "anthropic",
+                    "model_name": "claude-haiku-4-5-20251001",
+                },
+                "params": {"max_tokens": 10},
+                "environment": "e2e",
+                "span": {
+                    "trace_id": trace_id,
+                    "kind": "llm.generation",
+                    "agent_id": "e2e_runner",
+                },
+            },
+        )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["status"] == "succeeded"
+    assert isinstance(body.get("response_text"), str) and len(body["response_text"]) > 0
+
+    span_id = body.get("span_id")
+    assert span_id is not None, "span_id missing — auto-span not created"
+    assert len(span_id) == 36, f"span_id doesn't look like a UUID: {span_id!r}"
+
+    tel = body.get("telemetry", {})
+    assert tel.get("prompt_tokens", 0) > 0
+    assert tel.get("completion_tokens", 0) > 0
+
+
+async def test_execute_span_appears_in_trace_summary(
+    client: AsyncPromptLedgerClient,
+    base_url: str,
+    api_key: str,
+    require_anthropic_key,
+):
+    """Auto-created span is queryable via GET /v1/traces/{trace_id}/summary."""
+    trace_id = f"e2e-exec-trace-{uuid.uuid4().hex}"
+    prompt_name = f"e2e.execute.{uuid.uuid4().hex[:8]}"
+
+    await client.register_code_prompts(
+        [RegistrationPayload(name=prompt_name, template_source="Assistant: {{noop}}")]
+    )
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=60,
+    ) as http:
+        exec_resp = await http.post(
+            "/v1/executions/run",
+            json={
+                "prompt_name": prompt_name,
+                "messages": [{"role": "user", "content": "Say: done"}],
+                "model": {
+                    "provider": "anthropic",
+                    "model_name": "claude-haiku-4-5-20251001",
+                },
+                "params": {"max_tokens": 10},
+                "environment": "e2e",
+                "span": {"trace_id": trace_id, "agent_id": "e2e_runner"},
+            },
+        )
+    assert exec_resp.status_code == 200
+
+    summary = await client.get_trace_summary(trace_id)
+    assert summary.trace_id == trace_id
+    assert summary.span_count >= 1
+    assert summary.total_prompt_tokens > 0
+
+    agents = [a["agent_id"] for a in summary.by_agent]
+    assert "e2e_runner" in agents
