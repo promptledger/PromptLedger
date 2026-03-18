@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
-from ..db.database import init_db
+from ..db.database import AsyncSessionLocal, init_db
+from ..services.project_service import seed_default_api_key
 from ..settings import settings
 from .v1 import api as v1_api
 
@@ -32,7 +33,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("Model seeding completed successfully")
     except Exception as e:
         logger.error(f"Failed to seed models: {e}", exc_info=True)
-        # Don't fail startup if seeding fails
+        pass
+
+    # Seed default project and env-var API key (idempotent)
+    try:
+        logger.info("Seeding default project and API key...")
+        async with AsyncSessionLocal() as db:
+            await seed_default_api_key(db, settings.api_key)
+        logger.info("Default project seeding completed")
+    except Exception as e:
+        logger.error(f"Failed to seed default project: {e}", exc_info=True)
         pass
 
     yield

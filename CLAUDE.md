@@ -122,6 +122,7 @@ Feature requests and functional requirements live in `requirements/`. Each requi
 **Existing requirements:**
 - `requirements/FR-001-workflow-execution-tracking.md` — Workflow span tracking (implemented)
 - `requirements/FR-002-PromptLedger-Railway-Templates.md` — Railway template deployment
+- `requirements/FR-003-unified-execution-client.md` — Unified execution client: `messages` input, auto-span, `execute()` SDK method (proposed)
 - `requirements/RailwayTemplates.md` — Railway templates reference
 - `requirements/promptledger_epic_1_integration_enhancements.md` — Epic 1: Anthropic provider, Python SDK, dry-run registration, cost model, span ingestion API, docs (active)
 - `requirements/promptledger_epic_2_namespacing.md` — Epic 2: Project namespacing and multi-tenant API keys (deferred)
@@ -134,15 +135,17 @@ Feature requests and functional requirements live in `requirements/`. Each requi
 **Story format standard:** Every story in every requirement file must include an agile user story block immediately after the story heading, before the Goal line:
 
 ```markdown
-**User Story:**
-> As a **[role]**, I want [capability], so that [benefit].
-```
+## Writing Epics, Stories, Bugs & Tech Debt
 
-- **role** — the specific persona who benefits (e.g. "PromptLedger operator", "Python developer integrating PromptLedger", "CI/CD pipeline")
-- **capability** — what they want the system to do, in concrete terms
-- **benefit** — the outcome they care about, not a restatement of the capability
+**Full standards and templates:** `requirements/EPIC_TEMPLATE.md` — read this before writing any requirements artefact.
 
-Never write vague roles like "user" or "developer" without qualification. The role should identify *which* type of user and in *what context*.
+**Key rules (full detail in template):**
+- Stories use the Agile format: **"As a [role], I would like [capability], so that [benefit]."**
+- Acceptance criteria are written in **Gherkin** (`Scenario` / `Given` / `When` / `Then`). Each scenario maps 1:1 to a pytest test function.
+- Every story must include at least one **negative/unhappy-path** Gherkin scenario.
+- Bug documents go in `requirements/bugs/BUG-{NN}-{slug}.md`. Each root cause must name the file + line + a code snippet.
+- Tech debt entries go at the **bottom** of `requirements/tech_debt_tracker.md` with a specific trigger condition — not "someday".
+- Epic numbers are sequential; check existing files for the next N before creating.
 
 ## Configuration
 

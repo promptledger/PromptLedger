@@ -78,6 +78,8 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Create a test client with database override."""
     from httpx import ASGITransport
 
+    from prompt_ledger.api.dependencies import _key_cache
+    from prompt_ledger.models.project import ApiKey, Project, hash_api_key
     from prompt_ledger.settings import settings
 
     async def override_get_db():
@@ -89,12 +91,32 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     original_key = settings.api_key
     settings.api_key = "test-key"
 
+    # Clear auth cache to prevent inter-test pollution.
+    _key_cache.clear()
+
+    # Seed the default project and test key into the test DB.
+    # The lifespan seeding uses the app's own DB connection (not db_session),
+    # so we must seed manually here for auth to work in tests.
+    default_project = Project(name="default")
+    db_session.add(default_project)
+    await db_session.flush()
+    db_session.add(
+        ApiKey(
+            key_hash=hash_api_key("test-key"),
+            project_id=default_project.project_id,
+            label="test env var key",
+            is_system_key=True,
+        )
+    )
+    await db_session.flush()
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
     settings.api_key = original_key
     app.dependency_overrides.clear()
+    _key_cache.clear()
 
 
 @pytest.fixture
