@@ -4,6 +4,78 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-18] - Epic 2 Story 2.5: documentation update ✅
+
+### Summary
+- **README.md** — added multi-tenancy and admin API to features list; added "Create a Project" quick-start snippet; updated Mode 1/2 quick examples to use `$PROMPTLEDGER_API_KEY` (project-scoped) not `$API_KEY`; updated roadmap: Epic 1 fully ✅, Epic 2 fully ✅ with 5 bullet points
+- **INTEGRATION_GUIDE.md** — updated footer timestamp to Epic 2; core Project Setup, key rotation/recovery, and CI/CD note were already present from Story 2.4 work
+- **ARCHITECTURE.md** — rewrote data model tables to include `projects`/`api_keys` with full column lists and `project_id` on `prompts`, `executions`, `spans`; bumped version to 2.0 and date to 2026-03-18; auth section was already accurate from 2.4
+- **.env.example** — added comment explaining `API_KEY` is the admin/default-project key; consuming apps must get project-scoped keys via `POST /v1/admin/projects`
+- **client/README.md** — project-scoped key note was already present from Story 2.4 work
+
+### Decisions
+- Did not touch `CONTRIBUTING.md` or `TEST_README.md` — neither describes auth or project-scoped operations so Epic 2 doesn't require changes there
+- Roadmap items marked complete reflect code reality: Epic 1 Stories 1.2 (SDK) and 1.7 (spans) were marked incomplete in the old README but are implemented
+
+### Next Steps
+- [ ] Epic 2 complete — ready to begin SRF integration with namespacing in place from day one
+
+---
+
+## [2026-03-18] - Epic 2 Story 2.5: documentation alignment completed
+
+### Summary
+- Updated `README.md` to document DB-backed API keys, add a project-creation quick start, switch examples to project-scoped keys, and mark Epic 2 namespacing as implemented
+- Updated `INTEGRATION_GUIDE.md` with a new Project Setup section covering admin/default-project keys vs project-scoped keys, project creation, zero-downtime key rotation, and unrecoverable plaintext key behavior
+- Updated `INTEGRATION_GUIDE.md` API guidance to use the implemented execution routes (`/v1/executions/run` and `/v1/executions/submit`) and added admin endpoint references
+- Updated `ARCHITECTURE.md` to describe the Epic 2 auth model: SHA-256 key lookup, 60s TTL cache, default-project admin authorization, and project-scoped data isolation
+- Updated `client/README.md` to state that SDK callers should use project-scoped keys, not the PromptLedger admin key
+
+### Validated Against Code
+- `src/prompt_ledger/api/dependencies.py` - DB-backed auth, cache, default-project admin check
+- `src/prompt_ledger/api/v1/endpoints/admin.py` - project create/list, key list/issue/revoke
+- `src/prompt_ledger/api/v1/endpoints/prompts.py` - prompt listing and lookup scoped by project
+- `src/prompt_ledger/api/v1/endpoints/executions.py` - implemented execution routes are `/v1/executions/run` and `/v1/executions/submit`
+- `src/prompt_ledger/api/v1/endpoints/spans.py` and `analytics.py` - trace and analytics scoping by `project_id`
+
+### Decisions
+- Treated Story 2.5 as complete only after the public docs were aligned, not merely the requirements file
+- Preserved `.env.example` as-is because it was already correctly documenting `API_KEY` as the admin/default-project key
+
+### Issues & Resolution
+- The requirements file had already been corrected earlier, but the public docs still reflected the pre-Epic-2 state; this pass brought the operator and SDK-facing docs into line with the implemented code
+
+### Next Steps
+- [ ] Run a broader docs cleanup later for legacy formatting / encoding artifacts unrelated to Epic 2
+- [x] Story 2.5 complete
+
+## [2026-03-18] - Epic 2 Story 2.5: requirements alignment and code validation
+
+### Summary
+- Updated `requirements/PL_epic_2_namespacing.md` Story 2.5 so it reflects the implemented Epic 2 behavior rather than the original planned-only wording
+- Documented the shipped namespacing model: DB-backed `projects` / `api_keys`, seeded default project key from `API_KEY`, 60s auth cache, project-scoped prompts/executions/spans/analytics, and `/v1/admin/*` endpoints
+- Added a "docs status at review time" section capturing which public docs are partially aligned and which remain stale
+- Added a validated file inventory for Epic 2 implementation across schema, models, services, endpoints, and tests
+- Updated Story 2.5 acceptance criteria around the real operator flow: create project, issue project key, integrate client, rotate/recover keys, and understand project scoping
+
+### Validated Against Code
+- `src/prompt_ledger/api/dependencies.py` - DB-backed auth, SHA-256 key lookup, 60s TTL cache, default-project admin gate
+- `src/prompt_ledger/api/main.py` - startup seeding of default project + env-var key
+- `src/prompt_ledger/api/v1/endpoints/admin.py` - project create/list, key list/issue/revoke
+- `src/prompt_ledger/api/v1/endpoints/prompts.py`, `code_prompts.py`, `executions.py`, `spans.py`, `analytics.py` - project scoping enforced in endpoint layer
+- `src/prompt_ledger/models/project.py`, `prompt.py`, `execution.py`, `span.py` - project-aware schema
+- `tests/integration/test_admin.py`, `test_auth_upgrade.py`, `test_prompt_scoping.py`, `test_span_scoping.py` - integration coverage for Epic 2 behavior
+
+### Decisions
+- Treated Story 2.5 as a documentation-alignment story because Epic 2 is implemented in code even though some top-level docs still describe it as deferred
+- This entry was the requirements/spec alignment pass; the public docs were completed in the follow-up Story 2.5 entry above
+
+### Remaining Work
+- [x] Update `README.md` to document admin/project-scoped keys
+- [x] Update `INTEGRATION_GUIDE.md` with project setup, project-scoped SDK auth, and key rotation/recovery flow
+- [x] Update `ARCHITECTURE.md` auth and schema sections for `projects`, `api_keys`, and `project_id` scoping
+- [x] Update `client/README.md` to state that SDK callers should use project-scoped keys, not the admin key
+
 ## [2026-03-18] - Epic 2 Story 2.3: scope spans and executions to project
 
 ### Summary
