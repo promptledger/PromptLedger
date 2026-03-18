@@ -165,6 +165,7 @@ async def execute_code_prompt(
         "prompt_name": name,
         "version_number": request.get("version"),
         "variables": request.get("variables", {}),
+        "messages": request.get("messages"),
         "model": {
             "provider": "openai",  # Default to OpenAI for now
             "model_name": request.get("model_name", "gpt-4o-mini"),
@@ -173,6 +174,7 @@ async def execute_code_prompt(
         "environment": request.get("environment", "dev"),
         "correlation_id": request.get("correlation_id"),
         "idempotency_key": request.get("idempotency_key"),
+        "span": request.get("span"),
     }
 
     # Execute based on mode

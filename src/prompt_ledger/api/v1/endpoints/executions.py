@@ -3,7 +3,7 @@
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -38,7 +38,7 @@ async def run_execution_sync(
     return result
 
 
-@router.post("/submit", response_model=Dict[str, Any])
+@router.post("/submit", response_model=Dict[str, Any], status_code=status.HTTP_202_ACCEPTED)
 async def submit_execution_async(
     execution_request: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
@@ -46,8 +46,19 @@ async def submit_execution_async(
 ) -> Dict[str, Any]:
     """Submit a prompt for asynchronous execution."""
 
+    if "span" in execution_request:
+        span_block = execution_request.get("span") or {}
+        if not span_block.get("trace_id"):
+            raise HTTPException(
+                status_code=422,
+                detail="span.trace_id is required when span block is provided",
+            )
+
     service = ExecutionService(db, project_id=project_id)
-    result = await service.submit_async(execution_request)
+    try:
+        result = await service.submit_async(execution_request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return result
 
 

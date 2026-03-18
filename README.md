@@ -215,9 +215,12 @@ curl -X POST "http://localhost:8000/v1/executions/submit" \
     "environment": "dev",
     "variables": {"text": "Your document text here..."},
     "model": {"provider": "openai", "model_name": "gpt-4o-mini"},
-    "params": {"max_new_tokens": 800, "temperature": 0.2}
+    "params": {"max_new_tokens": 800, "temperature": 0.2},
+    "span": {"trace_id": "async-run-001", "agent_id": "worker-a"}
   }'
 ```
+
+When a `span` block is included, PromptLedger forwards that trace context to the Celery worker. The worker creates the execution span after the provider call completes, and the task result includes `span_id` for downstream child spans.
 
 **Poll Execution Status**
 ```bash

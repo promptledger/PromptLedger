@@ -298,7 +298,15 @@ class TestExecutionMessagesInput:
         await db_session.commit()
 
         trace_id = str(uuid.uuid4())
-        parent_span_id = str(uuid.uuid4())
+        parent_span = Span(
+            trace_id=trace_id,
+            name="parent",
+            kind="workflow",
+            status="ok",
+        )
+        db_session.add(parent_span)
+        await db_session.flush()
+        await db_session.commit()
 
         with patch(
             "prompt_ledger.services.providers.OpenAIAdapter.generate",
@@ -313,7 +321,7 @@ class TestExecutionMessagesInput:
                     "messages": [{"role": "user", "content": "hello"}],
                     "span": {
                         "trace_id": trace_id,
-                        "parent_span_id": parent_span_id,
+                        "parent_span_id": str(parent_span.span_id),
                         "agent_id": "debate-agent-1",
                     },
                 },
@@ -322,9 +330,10 @@ class TestExecutionMessagesInput:
         assert response.status_code == 200
 
         result = await db_session.execute(select(Span).where(Span.trace_id == trace_id))
-        span = result.scalar_one()
+        spans = result.scalars().all()
+        span = next(item for item in spans if item.execution_id is not None)
         assert span.agent_id == "debate-agent-1"
-        assert str(span.parent_span_id) == parent_span_id
+        assert span.parent_span_id == parent_span.span_id
         assert span.prompt_tokens == MOCK_GENERATE_RESULT["prompt_tokens"]
         assert span.completion_tokens == MOCK_GENERATE_RESULT["response_tokens"]
         assert span.prompt_name == "test.messages.spanfields"

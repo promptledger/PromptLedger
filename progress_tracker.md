@@ -4,6 +4,34 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-18] - Epic 3: async execution observability completed
+
+### Summary
+- **Core async path** - `/v1/executions/submit` now validates `span.trace_id`, returns `202`, and forwards `span` context into the Celery task; tracked-prompt async execution preserves both `messages` and `span`
+- **Execution service / worker** - added shared `build_execution_span(...)`; Celery worker creates the execution span after provider success, returns `span_id`, and isolates span write failures so executions still complete successfully
+- **Epic 3 tests** - added `tests/integration/test_async_execution_observability.py` with 5 focused integration tests covering submit validation, task forwarding, worker span creation, null `span_id` without context, and non-fatal span write failure
+- **Existing integration coverage updated** - `tests/integration/test_executions_messages.py` adjusted to seed real parent spans and validate against the actual FK-backed span model
+- **Documentation closeout** - updated `requirements/PL_epic_3_async_execution_observability.md`, `README.md`, `INTEGRATION_GUIDE.md`, and `ARCHITECTURE.md` to reflect the shipped async observability behavior
+
+### Test Execution
+- `pytest tests/integration/test_async_execution_observability.py -q` - `5 passed`
+- `pytest tests/integration/test_executions_messages.py -q` - `10 passed`
+- Total targeted Epic 3 integration coverage - `15 passed`
+
+### Decisions
+- Kept async span creation behavior aligned with the sync path: span is created after the provider call so telemetry fields are real, not estimated
+- Treated failed span writes as observability-only failures, not execution failures
+- Preserved the `parent_span_id` foreign key contract in tests and docs rather than weakening the schema
+
+### Issues & Resolution
+- Worker-path integration tests initially used a masked async DB URL when building the sync session; fixed by rendering the real password from SQLAlchemy's URL object
+- Direct task invocation inside async pytest tests caused event-loop conflicts; fixed by running direct worker task calls on a background thread
+- Existing span tests assumed arbitrary `parent_span_id` values were valid; fixed by seeding real parent spans to match the FK-backed schema
+
+### Next Steps
+- [x] Epic 3 complete
+- [ ] Optional follow-up: broader async regression sweep outside the Epic 3 target files
+
 ## [2026-03-18] - Epic 2 Story 2.5: documentation update ✅
 
 ### Summary

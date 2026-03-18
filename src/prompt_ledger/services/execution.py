@@ -19,6 +19,47 @@ _pricing_table = PricingTable.default()
 log = logging.getLogger(__name__)
 
 
+def build_execution_span(execution: Execution, request: Dict[str, Any], project_id):
+    """Build an execution-backed span object from request trace context.
+
+    Returns None when no valid trace context was provided.
+    """
+    from prompt_ledger.models.span import Span
+
+    span_block = request.get("span", {})
+    trace_id = span_block.get("trace_id")
+    if not trace_id:
+        return None
+
+    parent_span_id = span_block.get("parent_span_id")
+    if parent_span_id:
+        from uuid import UUID as _UUID
+
+        parent_span_id = _UUID(str(parent_span_id))
+
+    return Span(
+        trace_id=trace_id,
+        parent_span_id=parent_span_id,
+        name=request["prompt_name"],
+        kind=span_block.get("kind", "llm.generation"),
+        status="ok",
+        agent_id=span_block.get("agent_id"),
+        prompt_name=request["prompt_name"],
+        model=execution.model_name,
+        prompt_tokens=execution.prompt_tokens,
+        completion_tokens=execution.response_tokens,
+        duration_ms=execution.latency_ms,
+        input_data=(
+            {"messages": request.get("messages")}
+            if request.get("messages")
+            else {"rendered_prompt": execution.rendered_prompt}
+        ),
+        output_data={"response_text": execution.response_text},
+        execution_id=execution.execution_id,
+        project_id=project_id,
+    )
+
+
 class ExecutionService:
     """Service for managing prompt executions."""
 
@@ -136,10 +177,28 @@ class ExecutionService:
         # Resolve prompt and version
         prompt, version, model = await self._resolve_execution_context(request)
 
-        # Render prompt
-        rendered_prompt, variables = await self._render_prompt(
-            version.template_source, request.get("variables", {})
-        )
+        # Determine input mode: messages vs rendered prompt
+        messages = request.get("messages")
+        variables = request.get("variables")
+
+        if messages is not None and prompt.mode == "full":
+            raise ValueError(
+                "messages input not allowed for full-mode prompts â€” use variables"
+            )
+
+        if messages is not None and len(messages) == 0:
+            raise ValueError("messages array must not be empty")
+
+        if messages is None and prompt.mode == "tracking" and not variables:
+            raise ValueError("variables or messages required for tracking-mode prompts")
+
+        if messages is not None:
+            rendered_prompt = None
+            used_variables: Dict[str, Any] = {}
+        else:
+            rendered_prompt, used_variables = await self._render_prompt(
+                version.template_source, variables or {}
+            )
 
         # Create execution record
         execution = await self._create_execution(
@@ -147,8 +206,8 @@ class ExecutionService:
             version=version,
             model=model,
             rendered_prompt=rendered_prompt,
-            messages=None,
-            variables=variables,
+            messages=messages,
+            variables=used_variables,
             mode="async",
             request=request,
         )
@@ -160,7 +219,7 @@ class ExecutionService:
 
         celery_app.send_task(
             "prompt_ledger.workers.tasks.execute_prompt_task",
-            args=[str(execution.execution_id)],
+            args=[str(execution.execution_id), request.get("span")],
         )
 
         return {
@@ -289,40 +348,10 @@ class ExecutionService:
         result: Dict[str, Any],
     ):
         """Create an auto-span linked to this execution (FR-003)."""
-        from prompt_ledger.models.span import Span
-
-        span_block = request.get("span", {})
-        trace_id = span_block.get("trace_id")
-        if not trace_id:
+        span = build_execution_span(execution, request, self.project_id)
+        if span is None:
             return None
-
-        parent_span_id = span_block.get("parent_span_id")
-        if parent_span_id:
-            from uuid import UUID as _UUID
-
-            parent_span_id = _UUID(parent_span_id)
-
-        span = Span(
-            trace_id=trace_id,
-            parent_span_id=parent_span_id,
-            name=request["prompt_name"],
-            kind=span_block.get("kind", "llm.generation"),
-            status="ok",
-            agent_id=span_block.get("agent_id"),
-            prompt_name=request["prompt_name"],
-            model=execution.model_name,
-            prompt_tokens=execution.prompt_tokens,
-            completion_tokens=execution.response_tokens,
-            duration_ms=execution.latency_ms,
-            input_data=(
-                {"messages": request.get("messages")}
-                if request.get("messages")
-                else {"rendered_prompt": execution.rendered_prompt}
-            ),
-            output_data={"response_text": execution.response_text},
-            execution_id=execution.execution_id,
-            project_id=self.project_id,
-        )
-        self.db.add(span)
-        await self.db.flush()
+        async with self.db.begin_nested():
+            self.db.add(span)
+            await self.db.flush()
         return span

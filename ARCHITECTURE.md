@@ -222,12 +222,13 @@ models
 
 **Flow:**
 1. Client submits execution via `/executions/submit`
-2. API creates execution record (status: `queued`)
+2. API creates execution record (status: `queued`) and forwards optional `span` context into the task payload
 3. Task pushed to Redis queue
 4. Celery worker picks up task
 5. Worker executes prompt via provider
-6. Worker updates execution record (status: `succeeded`/`failed`)
-7. Client polls `/executions/{id}` for result
+6. After provider success, worker auto-creates the execution span from telemetry when span context was supplied
+7. Worker updates execution record (status: `succeeded`/`failed`) and includes `span_id` in the task result when a span was created
+8. Client polls `/executions/{id}` for result
 
 **Benefits:**
 - Non-blocking API responses

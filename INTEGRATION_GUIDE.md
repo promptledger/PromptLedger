@@ -1078,7 +1078,7 @@ no `span` block was included in the request.
 
 `total_cost` is `null` (not `0.00`) when the model name is not in the pricing table.
 
-### `POST /v1/executions/submit` — async submission response
+### `POST /v1/executions/submit` - async submission response
 
 ```json
 {
@@ -1090,7 +1090,7 @@ no `span` block was included in the request.
 }
 ```
 
-Poll `GET /v1/executions/{execution_id}` for the full telemetry once the execution completes.
+If you include a `span` block in the submit request, PromptLedger validates and forwards that context into the Celery task. The worker creates the span after provider success. Poll `GET /v1/executions/{execution_id}` for the execution record, and read the Celery task result if you need the async `span_id` for downstream child spans.
 
 ### `POST /v1/prompts/register-code`
 

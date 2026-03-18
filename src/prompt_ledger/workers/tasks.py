@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime, timezone
+import logging
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,12 +11,17 @@ from ..db.database import SyncSessionLocal
 from ..models.execution import Execution
 from ..models.model import Model
 from ..models.prompt import Prompt, PromptVersion
+from ..services.execution import build_execution_span
 from ..services.providers import ProviderAdapterFactory
 from .celery_app import celery_app
 
+log = logging.getLogger(__name__)
+
 
 @celery_app.task(bind=True, max_retries=3)
-def execute_prompt_task(self, execution_id: str) -> dict[str, str]:
+def execute_prompt_task(
+    self, execution_id: str, span_context: dict | None = None
+) -> dict[str, str | None]:
     """Execute a prompt asynchronously using sync database operations.
 
     This task uses synchronous database operations (psycopg) instead of async
@@ -69,6 +75,7 @@ def execute_prompt_task(self, execution_id: str) -> dict[str, str]:
                         rendered_prompt=execution.rendered_prompt,
                         model_name=model.model_name,
                         params=params,
+                        messages=execution.messages_json,
                     )
                 )
             finally:
@@ -82,9 +89,32 @@ def execute_prompt_task(self, execution_id: str) -> dict[str, str]:
             execution.latency_ms = int((time.time() - start_time) * 1000)
             execution.completed_at = datetime.now(timezone.utc)
 
+            span_id: str | None = None
+            if span_context:
+                request_for_span = {
+                    "prompt_name": execution.prompt.name if execution.prompt else "execution",
+                    "messages": execution.messages_json,
+                    "span": span_context,
+                }
+                try:
+                    span = build_execution_span(
+                        execution, request_for_span, execution.project_id
+                    )
+                    if span is not None:
+                        with db.begin_nested():
+                            db.add(span)
+                            db.flush()
+                        span_id = str(span.span_id)
+                except Exception as exc:
+                    log.warning("Failed to create async auto-span: %s", exc)
+
             db.commit()
 
-            return {"status": "succeeded", "execution_id": execution_id}
+            return {
+                "status": "succeeded",
+                "execution_id": execution_id,
+                "span_id": span_id,
+            }
 
         except Exception as exc:
             # Handle retry logic
@@ -103,4 +133,9 @@ def execute_prompt_task(self, execution_id: str) -> dict[str, str]:
             except Exception:
                 pass  # Log error but don't fail the task
 
-            return {"status": "failed", "execution_id": execution_id, "error": str(exc)}
+            return {
+                "status": "failed",
+                "execution_id": execution_id,
+                "span_id": None,
+                "error": str(exc),
+            }
