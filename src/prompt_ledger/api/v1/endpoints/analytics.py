@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from prompt_ledger.api.dependencies import verify_api_key
@@ -215,6 +215,79 @@ async def get_prompts_analytics(
             "total_response_tokens": stats.total_response_tokens or 0,
             "total_cost": total_cost,
         }
+
+
+@router.get("/tools", response_model=List[Dict[str, Any]])
+async def get_tool_analytics(
+    from_: Optional[str] = Query(
+        None,
+        alias="from",
+        description="ISO-8601 datetime — only include spans on or after this time",
+    ),
+    db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
+) -> List[Dict[str, Any]]:
+    """Error rates and average latency grouped by tool_name.
+
+    Only spans with kind='tool' and a non-null tool_name are included.
+    Results are scoped to the calling project.
+
+    Query parameters:
+    - from: optional ISO-8601 datetime filter (inclusive lower bound on start_time)
+
+    Response format::
+
+        [
+            {
+                "tool_name": "web_search",
+                "call_count": 6,
+                "error_rate": 0.333,
+                "avg_duration_ms": 320
+            },
+            ...
+        ]
+    """
+    from datetime import datetime
+
+    query = (
+        select(
+            Span.tool_name,
+            func.count(Span.span_id).label("call_count"),
+            func.sum(func.cast(Span.success.is_(False), Integer)).label(
+                "failure_count"
+            ),
+            func.avg(Span.duration_ms).label("avg_duration_ms"),
+        )
+        .where(
+            Span.kind == "tool",
+            Span.tool_name.isnot(None),
+            Span.project_id == project_id,
+        )
+        .group_by(Span.tool_name)
+        .order_by(func.count(Span.span_id).desc())
+    )
+
+    if from_:
+        try:
+            from_dt = datetime.fromisoformat(from_)
+            query = query.where(Span.start_time >= from_dt)
+        except ValueError:
+            pass
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "tool_name": row.tool_name,
+            "call_count": row.call_count,
+            "error_rate": round(row.failure_count / row.call_count, 4)
+            if row.call_count
+            else 0.0,
+            "avg_duration_ms": int(row.avg_duration_ms or 0),
+        }
+        for row in rows
+    ]
 
 
 @router.get("/agents", response_model=Dict[str, Any])
