@@ -6,7 +6,7 @@ In async contexts, use AsyncPromptLedgerClient directly.
 """
 
 import asyncio
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from .async_client import AsyncPromptLedgerClient
 from .models import RegisterResult, RegistrationPayload, SpanPayload, TraceSummary
@@ -43,3 +43,30 @@ class PromptLedgerClient:
 
     def get_trace_summary(self, trace_id: str) -> TraceSummary:
         return asyncio.run(self._async.get_trace_summary(trace_id))
+
+    def log_tool_call(
+        self,
+        *,
+        trace_id: str,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+        success: bool,
+        duration_ms: int,
+        parent_span_id: Optional[str] = None,
+        error_message: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> str:
+        return asyncio.run(
+            self._async.log_tool_call(
+                trace_id=trace_id,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                tool_result=tool_result,
+                success=success,
+                duration_ms=duration_ms,
+                parent_span_id=parent_span_id,
+                error_message=error_message,
+                agent_id=agent_id,
+            )
+        )

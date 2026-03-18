@@ -213,6 +213,90 @@ class TestGetTraceSummary:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# log_tool_call()
+# ---------------------------------------------------------------------------
+
+
+class TestLogToolCall:
+    async def test_log_tool_call_sends_correct_span_payload(self, client):
+        post_mock = AsyncMock(
+            return_value=_mock_response(201, {"span_id": "tool-span-xyz"})
+        )
+        with patch.object(client._http, "post", new=post_mock):
+            result = await client.log_tool_call(
+                trace_id="trace-abc",
+                tool_name="web_search",
+                tool_args={"query": "foo"},
+                tool_result={"hits": []},
+                success=True,
+                duration_ms=340,
+                parent_span_id="phase-span-xyz",
+            )
+        assert result == "tool-span-xyz"
+        _, kwargs = post_mock.call_args
+        body = kwargs["json"]
+        assert body["kind"] == "tool"
+        assert body["tool_name"] == "web_search"
+        assert body["success"] is True
+        assert body["duration_ms"] == 340
+        assert body["parent_span_id"] == "phase-span-xyz"
+        assert body["trace_id"] == "trace-abc"
+
+    async def test_log_tool_call_failure_sets_status_error(self, client):
+        post_mock = AsyncMock(return_value=_mock_response(201, {"span_id": "err-span"}))
+        with patch.object(client._http, "post", new=post_mock):
+            await client.log_tool_call(
+                trace_id="trace-fail",
+                tool_name="db_lookup",
+                tool_args={},
+                tool_result={"error_type": "TimeoutError"},
+                success=False,
+                duration_ms=5000,
+                error_message="timeout",
+            )
+        _, kwargs = post_mock.call_args
+        body = kwargs["json"]
+        assert body["success"] is False
+        assert body["status"] == "error"
+        assert body["error_message"] == "timeout"
+
+    async def test_log_tool_call_without_parent_span_id(self, client):
+        post_mock = AsyncMock(
+            return_value=_mock_response(201, {"span_id": "root-tool"})
+        )
+        with patch.object(client._http, "post", new=post_mock):
+            await client.log_tool_call(
+                trace_id="trace-root",
+                tool_name="paper_fetch",
+                tool_args={"doi": "10.1234/test"},
+                tool_result={"abstract": "..."},
+                success=True,
+                duration_ms=210,
+            )
+        _, kwargs = post_mock.call_args
+        body = kwargs["json"]
+        assert "parent_span_id" not in body
+
+    async def test_log_tool_call_422_raises_promptledger_error(self, client):
+        with patch.object(
+            client._http,
+            "post",
+            new=AsyncMock(
+                return_value=_mock_response(422, {"detail": "tool_name required"})
+            ),
+        ):
+            with pytest.raises(PromptLedgerError):
+                await client.log_tool_call(
+                    trace_id="t",
+                    tool_name="x",
+                    tool_args={},
+                    tool_result={},
+                    success=True,
+                    duration_ms=1,
+                )
+
+
 class TestSyncClientParity:
     def test_sync_client_exposes_same_methods(self):
         from promptledger_client.client import PromptLedgerClient
@@ -223,5 +307,6 @@ class TestSyncClientParity:
             "log_span",
             "register_code_prompts",
             "get_trace_summary",
+            "log_tool_call",
         ):
             assert callable(getattr(sync, method, None)), f"Missing method: {method}"

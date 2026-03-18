@@ -159,6 +159,64 @@ class AsyncPromptLedgerClient:
 
         return result
 
+    async def log_tool_call(
+        self,
+        *,
+        trace_id: str,
+        tool_name: str,
+        tool_args: dict,
+        tool_result: dict,
+        success: bool,
+        duration_ms: int,
+        parent_span_id: Optional[str] = None,
+        error_message: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> str:
+        """Log a tool call as a kind='tool' span and return the span_id.
+
+        Constructs the span payload and posts it to POST /v1/spans.
+        Sets status='error' automatically when success=False.
+
+        Args:
+            trace_id:       The current trace identifier.
+            tool_name:      Stable name for the tool (e.g. 'web_search').
+            tool_args:      Arguments passed to the tool.
+            tool_result:    Return value / output from the tool.
+            success:        Whether the tool call succeeded.
+            duration_ms:    Wall-clock duration of the tool call.
+            parent_span_id: ID of the parent span (usually the current agent turn).
+            error_message:  Human-readable error description (for success=False).
+            agent_id:       Agent identifier to attach to the span.
+
+        Returns:
+            The assigned span_id UUID string.
+
+        Raises:
+            PromptLedgerError: On 400, 422, or 5xx responses.
+            AuthError:         On 401 responses.
+        """
+        body: dict = {
+            "trace_id": trace_id,
+            "name": tool_name,
+            "kind": "tool",
+            "tool_name": tool_name,
+            "tool_args": tool_args,
+            "tool_result": tool_result,
+            "success": success,
+            "duration_ms": duration_ms,
+            "status": "error" if not success else "ok",
+        }
+        if parent_span_id is not None:
+            body["parent_span_id"] = parent_span_id
+        if error_message is not None:
+            body["error_message"] = error_message
+        if agent_id is not None:
+            body["agent_id"] = agent_id
+
+        response = await self._http.post("/v1/spans", json=body)
+        self._raise_for_status(response)
+        return response.json()["span_id"]
+
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._http.aclose()
@@ -178,7 +236,7 @@ class AsyncPromptLedgerClient:
     # ------------------------------------------------------------------
 
     def _raise_for_status(self, response: httpx.Response) -> None:
-        if response.status_code == 400:
+        if response.status_code in (400, 422):
             detail = response.json().get("detail", response.text)
             raise PromptLedgerError(f"Bad request: {detail}")
         if response.status_code == 401:
