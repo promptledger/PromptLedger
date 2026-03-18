@@ -5,11 +5,19 @@ and Celery worker — using the promptledger-client SDK.
 
 Run:
     export PROMPTLEDGER_URL=https://your-api.up.railway.app
-    export PROMPTLEDGER_API_KEY=your-key
+    export PROMPTLEDGER_API_KEY=your-key   # admin/default-project system key
     pytest tests/e2e/ -v
+
+Epic coverage:
+    Sections 1-7  — Epic 1 (span ingestion, analytics, execute() with messages)
+    Section 8     — Epic 2 (project namespacing, admin API)
+    Section 9     — Epic 3 (async execution with span context)
+    Section 10    — Epic 4 (tool call capture, analytics/tools)
 """
 
+import asyncio
 import os
+import time
 import uuid
 
 import httpx
@@ -343,3 +351,381 @@ async def test_execute_span_appears_in_trace_summary(
 
     agents = [a["agent_id"] for a in summary.by_agent]
     assert "e2e_runner" in agents
+
+
+# ---------------------------------------------------------------------------
+# 8. Admin API — Epic 2 (project namespacing)
+# ---------------------------------------------------------------------------
+# The admin key is the same as PROMPTLEDGER_API_KEY: it is the default
+# project's system key, seeded at startup from the API_KEY env var.
+# ---------------------------------------------------------------------------
+
+
+async def test_admin_create_project_and_issue_key(base_url: str, api_key: str):
+    """POST /v1/admin/projects creates a project and returns a plaintext API key."""
+    project_slug = f"e2e-proj-{uuid.uuid4().hex[:8]}"
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=30,
+    ) as http:
+        resp = await http.post(
+            "/v1/admin/projects",
+            json={"name": project_slug, "key_label": f"{project_slug}-key"},
+        )
+
+    assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert "project_id" in body
+    assert body["name"] == project_slug
+    assert isinstance(body.get("api_key"), str) and body["api_key"].startswith("pl-")
+    assert "key_id" in body
+
+
+async def test_admin_issued_key_authenticates(base_url: str, api_key: str):
+    """A key issued via POST /v1/admin/projects works for span ingestion."""
+    project_slug = f"e2e-auth-{uuid.uuid4().hex[:8]}"
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=30,
+    ) as http:
+        create_resp = await http.post(
+            "/v1/admin/projects",
+            json={"name": project_slug, "key_label": "auth-test"},
+        )
+    assert create_resp.status_code == 201
+    new_key = create_resp.json()["api_key"]
+
+    # Use the new project-scoped key to ingest a span
+    async with AsyncPromptLedgerClient(
+        base_url=base_url, api_key=new_key, timeout=30.0
+    ) as new_client:
+        span_id = await new_client.log_span(
+            SpanPayload(
+                trace_id=f"e2e-new-proj-{uuid.uuid4().hex}",
+                name="e2e.project_scoped_span",
+                kind="llm.generation",
+            )
+        )
+    assert isinstance(span_id, str) and len(span_id) == 36
+
+
+async def test_admin_project_span_isolation(base_url: str, api_key: str):
+    """Spans written by one project's key are not readable by another project."""
+    project_slug = f"e2e-iso-{uuid.uuid4().hex[:8]}"
+    trace_id = f"e2e-iso-trace-{uuid.uuid4().hex}"
+
+    # Create a second project and key
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=30,
+    ) as http:
+        create_resp = await http.post(
+            "/v1/admin/projects",
+            json={"name": project_slug, "key_label": "iso-test"},
+        )
+    assert create_resp.status_code == 201
+    other_key = create_resp.json()["api_key"]
+
+    # Write a span with the other project's key
+    async with AsyncPromptLedgerClient(
+        base_url=base_url, api_key=other_key, timeout=30.0
+    ) as other_client:
+        await other_client.log_span(
+            SpanPayload(
+                trace_id=trace_id,
+                name="e2e.other_project_span",
+                kind="llm.generation",
+            )
+        )
+
+    # The default project's key should get 404 for that trace
+    from promptledger_client.exceptions import NotFoundError
+
+    async with AsyncPromptLedgerClient(
+        base_url=base_url, api_key=api_key, timeout=30.0
+    ) as default_client:
+        with pytest.raises(NotFoundError):
+            await default_client.get_trace_summary(trace_id)
+
+
+async def test_admin_revoke_key_prevents_access(base_url: str, api_key: str):
+    """DELETE /v1/admin/keys/{key_id} immediately invalidates the key."""
+    project_slug = f"e2e-revoke-{uuid.uuid4().hex[:8]}"
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=30,
+    ) as http:
+        create_resp = await http.post(
+            "/v1/admin/projects",
+            json={"name": project_slug, "key_label": "revoke-test"},
+        )
+    assert create_resp.status_code == 201
+    body = create_resp.json()
+    revoke_key = body["api_key"]
+    key_id = body["key_id"]
+
+    # Confirm the key works before revoke
+    async with AsyncPromptLedgerClient(
+        base_url=base_url, api_key=revoke_key, timeout=30.0
+    ) as test_client:
+        assert await test_client.health() is True
+
+    # Revoke the key
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key},
+        timeout=30,
+    ) as http:
+        del_resp = await http.delete(f"/v1/admin/keys/{key_id}")
+    assert del_resp.status_code == 204
+
+    # Key should now be rejected
+    async with AsyncPromptLedgerClient(
+        base_url=base_url, api_key=revoke_key, timeout=30.0
+    ) as revoked_client:
+        with pytest.raises(AuthError):
+            await revoked_client.get_trace_summary("any-trace")
+
+
+# ---------------------------------------------------------------------------
+# 9. Async execution with span context — Epic 3
+# ---------------------------------------------------------------------------
+
+
+async def test_submit_async_returns_202(
+    base_url: str, api_key: str, require_anthropic_key
+):
+    """POST /v1/executions/submit returns 202 with execution_id."""
+    prompt_name = f"e2e.async.{uuid.uuid4().hex[:8]}"
+    trace_id = f"e2e-async-{uuid.uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=30,
+    ) as http:
+        # Register prompt first
+        await http.post(
+            "/v1/prompts/register-code",
+            json={
+                "prompts": [
+                    {
+                        "name": prompt_name,
+                        "template_source": "You are helpful. {{noop}}",
+                    }
+                ]
+            },
+        )
+
+        submit_resp = await http.post(
+            "/v1/executions/submit",
+            json={
+                "prompt_name": prompt_name,
+                "messages": [{"role": "user", "content": "Say: async ok"}],
+                "model": {
+                    "provider": "anthropic",
+                    "model_name": "claude-haiku-4-5-20251001",
+                },
+                "params": {"max_tokens": 10},
+                "environment": "e2e",
+                "span": {"trace_id": trace_id, "agent_id": "e2e_async"},
+            },
+        )
+
+    assert (
+        submit_resp.status_code == 202
+    ), f"Expected 202, got {submit_resp.status_code}: {submit_resp.text}"
+    body = submit_resp.json()
+    assert "execution_id" in body
+    assert body.get("status") == "pending"
+
+
+async def test_submit_async_span_context_forwarded(
+    base_url: str, api_key: str, require_anthropic_key
+):
+    """Worker creates a span with the submitted trace_id after the provider call."""
+    prompt_name = f"e2e.asyncspan.{uuid.uuid4().hex[:8]}"
+    trace_id = f"e2e-async-span-{uuid.uuid4().hex}"
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=60,
+    ) as http:
+        await http.post(
+            "/v1/prompts/register-code",
+            json={
+                "prompts": [
+                    {"name": prompt_name, "template_source": "Assistant: {{noop}}"}
+                ]
+            },
+        )
+
+        submit_resp = await http.post(
+            "/v1/executions/submit",
+            json={
+                "prompt_name": prompt_name,
+                "messages": [{"role": "user", "content": "Say: done"}],
+                "model": {
+                    "provider": "anthropic",
+                    "model_name": "claude-haiku-4-5-20251001",
+                },
+                "params": {"max_tokens": 10},
+                "environment": "e2e",
+                "span": {"trace_id": trace_id, "agent_id": "e2e_async_worker"},
+            },
+        )
+        assert submit_resp.status_code == 202
+        execution_id = submit_resp.json()["execution_id"]
+
+        # Poll for completion (max 30s)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            poll_resp = await http.get(f"/v1/executions/{execution_id}")
+            if poll_resp.json().get("status") in ("succeeded", "failed"):
+                break
+            await asyncio.sleep(2)
+
+        final = poll_resp.json()
+        assert final["status"] == "succeeded", f"Execution did not succeed: {final}"
+
+    # The worker should have created a span for this trace
+    async with AsyncPromptLedgerClient(
+        base_url=base_url, api_key=api_key, timeout=30.0
+    ) as client:
+        summary = await client.get_trace_summary(trace_id)
+    assert summary.span_count >= 1
+    agent_ids = [a["agent_id"] for a in summary.by_agent]
+    assert "e2e_async_worker" in agent_ids
+
+
+# ---------------------------------------------------------------------------
+# 10. Tool call capture — Epic 4
+# ---------------------------------------------------------------------------
+
+
+async def test_log_tool_call_returns_span_id(client: AsyncPromptLedgerClient):
+    """log_tool_call() submits a kind='tool' span and returns a UUID span_id."""
+    trace_id = f"e2e-tool-{uuid.uuid4().hex}"
+
+    span_id = await client.log_tool_call(
+        trace_id=trace_id,
+        tool_name="web_search",
+        tool_args={"query": "climate change IPCC"},
+        tool_result={"hits": [{"title": "IPCC 2023 Report"}]},
+        success=True,
+        duration_ms=310,
+        agent_id="e2e_researcher",
+    )
+    assert isinstance(span_id, str) and len(span_id) == 36
+
+
+async def test_log_tool_call_failure_logged(client: AsyncPromptLedgerClient):
+    """A failed tool call is logged with success=False and error_message."""
+    trace_id = f"e2e-tool-fail-{uuid.uuid4().hex}"
+
+    span_id = await client.log_tool_call(
+        trace_id=trace_id,
+        tool_name="db_lookup",
+        tool_args={"id": "doc-42"},
+        tool_result={"error_type": "TimeoutError"},
+        success=False,
+        duration_ms=5000,
+        error_message="connection timed out after 5 s",
+    )
+    assert isinstance(span_id, str) and len(span_id) == 36
+
+
+async def test_tool_call_appears_in_trace(client: AsyncPromptLedgerClient):
+    """A tool span logged via log_tool_call() is retrievable in the trace tree."""
+    trace_id = f"e2e-tool-tree-{uuid.uuid4().hex}"
+
+    await client.log_tool_call(
+        trace_id=trace_id,
+        tool_name="paper_fetch",
+        tool_args={"doi": "10.1234/test"},
+        tool_result={"abstract": "Climate analysis..."},
+        success=True,
+        duration_ms=215,
+    )
+
+    summary = await client.get_trace_summary(trace_id)
+    assert summary.span_count == 1
+
+
+async def test_tool_analytics_endpoint_returns_results(
+    client: AsyncPromptLedgerClient, base_url: str, api_key: str
+):
+    """GET /v1/analytics/tools returns aggregated call_count and error_rate."""
+    unique_tool = f"e2e_tool_{uuid.uuid4().hex[:8]}"
+    trace_id = f"e2e-analytics-{uuid.uuid4().hex}"
+
+    # Seed 3 calls: 2 success, 1 failure
+    await client.log_tool_call(
+        trace_id=trace_id,
+        tool_name=unique_tool,
+        tool_args={},
+        tool_result={},
+        success=True,
+        duration_ms=100,
+    )
+    await client.log_tool_call(
+        trace_id=trace_id,
+        tool_name=unique_tool,
+        tool_args={},
+        tool_result={},
+        success=True,
+        duration_ms=200,
+    )
+    await client.log_tool_call(
+        trace_id=trace_id,
+        tool_name=unique_tool,
+        tool_args={},
+        tool_result={"error_type": "Timeout"},
+        success=False,
+        duration_ms=3000,
+        error_message="timeout",
+    )
+
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key},
+        timeout=30,
+    ) as http:
+        resp = await http.get("/v1/analytics/tools")
+
+    assert resp.status_code == 200
+    tools = resp.json()
+    entry = next((t for t in tools if t["tool_name"] == unique_tool), None)
+    assert entry is not None, f"tool {unique_tool!r} not found in {tools}"
+    assert entry["call_count"] == 3
+    assert abs(entry["error_rate"] - (1 / 3)) < 0.01
+    assert "avg_duration_ms" in entry
+
+
+async def test_tool_span_invalid_without_tool_name_rejected(
+    base_url: str, api_key: str
+):
+    """POST /v1/spans with kind='tool' but no tool_name returns 422."""
+    async with httpx.AsyncClient(
+        base_url=base_url,
+        headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+        timeout=30,
+    ) as http:
+        resp = await http.post(
+            "/v1/spans",
+            json={
+                "trace_id": f"e2e-422-{uuid.uuid4().hex}",
+                "name": "missing_tool_name",
+                "kind": "tool",
+                # tool_name intentionally omitted
+            },
+        )
+    assert resp.status_code == 422
