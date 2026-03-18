@@ -121,17 +121,24 @@ class AnthropicAdapter(ProviderAdapter):
         """Generate response using Anthropic Messages API."""
         start_time = time.time()
 
-        final_messages = (
+        raw_messages = (
             messages
             if messages is not None
             else [{"role": "user", "content": rendered_prompt}]
         )
+
+        # Anthropic requires system prompt as a top-level parameter, not in messages
+        system_parts = [m["content"] for m in raw_messages if m.get("role") == "system"]
+        final_messages = [m for m in raw_messages if m.get("role") != "system"]
 
         request_params: Dict[str, Any] = {
             "model": model_name,
             "max_tokens": params.get("max_tokens", 1024),
             "messages": final_messages,
         }
+
+        if system_parts:
+            request_params["system"] = "\n\n".join(system_parts)
 
         if "temperature" in params:
             request_params["temperature"] = params["temperature"]
