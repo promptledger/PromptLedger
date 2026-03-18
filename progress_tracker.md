@@ -4,6 +4,23 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-18] - Hotfix: Epic 2 namespacing migrations seed default project
+
+### Summary
+- Updated `alembic/versions/d1e2f3a4b5c6_add_projects_and_api_keys.py` to insert the `default` project row during migration, not only at app startup
+- Updated `alembic/versions/e2f3a4b5c6d7_scope_prompts_to_project.py` to `INSERT ... ON CONFLICT DO NOTHING` for the default project before backfilling prompt `project_id`
+- Updated `alembic/versions/f3a4b5c6d7e8_scope_spans_and_executions_to_project.py` to do the same before backfilling spans and executions
+
+### Root Cause
+- Story 2.2 assumed startup seeding had already created the default project, but Railway runs Alembic migrations before FastAPI startup hooks
+- On databases with pre-Epic-2 prompt rows, the backfill query returned `NULL`, so `ALTER TABLE prompts ALTER COLUMN project_id SET NOT NULL` failed
+
+### Outcome
+- Fresh deploys and in-place upgrades now both have a valid default project before any `project_id` backfill runs
+- This removes the migration ordering dependency on application startup
+
+---
+
 ## [2026-03-18] - Epic 3: async execution observability completed
 
 ### Summary

@@ -36,7 +36,15 @@ def upgrade() -> None:
         ),
     )
 
-    # Step 2: backfill to the default project (created by startup seeding)
+    # Step 2: ensure the default project exists, then backfill existing rows.
+    op.execute(
+        """
+        INSERT INTO projects (name)
+        VALUES ('default')
+        ON CONFLICT ON CONSTRAINT uq_projects_name DO NOTHING
+        """
+    )
+
     op.execute(
         """
         UPDATE prompts

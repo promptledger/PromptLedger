@@ -28,6 +28,14 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.execute(
+        """
+        INSERT INTO projects (name)
+        VALUES ('default')
+        ON CONFLICT ON CONSTRAINT uq_projects_name DO NOTHING
+        """
+    )
+
     # --- spans table ---
     op.add_column(
         "spans",

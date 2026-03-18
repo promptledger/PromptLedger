@@ -5,8 +5,8 @@ Revises: c3d4e5f6a7b8
 Create Date: 2026-03-18
 
 Non-destructive: adds new tables only. All existing data continues to work.
-The default project and env-var API key are seeded at application startup
-(idempotent), not in this migration.
+This migration also seeds the default project row so follow-up migrations can
+backfill `project_id` safely before application startup seeding ever runs.
 """
 
 import sqlalchemy as sa
@@ -71,6 +71,16 @@ def upgrade() -> None:
     )
 
     op.create_index("idx_api_keys_project_id", "api_keys", ["project_id"])
+
+    # Seed the default project so subsequent namespacing migrations can backfill
+    # existing rows before the app startup seeding logic has executed.
+    op.execute(
+        """
+        INSERT INTO projects (name)
+        VALUES ('default')
+        ON CONFLICT ON CONSTRAINT uq_projects_name DO NOTHING
+        """
+    )
 
 
 def downgrade() -> None:
