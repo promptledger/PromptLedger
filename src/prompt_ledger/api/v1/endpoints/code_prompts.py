@@ -6,11 +6,13 @@ detects version changes based on template content.
 """
 
 from typing import Any, Dict, List
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from prompt_ledger.api.dependencies import verify_api_key
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.execution import Execution
 from prompt_ledger.models.prompt import Prompt, PromptVersion
@@ -24,6 +26,7 @@ router = APIRouter()
 async def register_code_prompts(
     request: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Register code-based prompts with automatic versioning.
 
@@ -69,7 +72,7 @@ async def register_code_prompts(
     Raises:
         HTTPException(400): If no prompts provided or invalid data
     """
-    service = PromptService(db)
+    service = PromptService(db, project_id)
     prompts = request.get("prompts", [])
     dry_run: bool = bool(request.get("dry_run", False))
 
@@ -99,6 +102,7 @@ async def execute_code_prompt(
     name: str,
     request: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Execute a code-based (tracking mode) prompt.
 
@@ -153,7 +157,7 @@ async def execute_code_prompt(
         HTTPException(400): If prompt is not in tracking mode
     """
     # Validate prompt is in tracking mode
-    prompt_service = PromptService(db)
+    prompt_service = PromptService(db, project_id)
     await prompt_service.validate_mode(name, "tracking", "execute operation")
 
     # Build execution request for execution service
@@ -195,6 +199,7 @@ async def get_prompt_history(
     name: str,
     mode: str = "full",
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Get prompt version history (works for both modes).
 
@@ -212,8 +217,10 @@ async def get_prompt_history(
     Raises:
         HTTPException(404): If prompt not found
     """
-    # Find prompt
-    result = await db.execute(select(Prompt).where(Prompt.name == name))
+    # Find prompt scoped to calling project
+    result = await db.execute(
+        select(Prompt).where(Prompt.name == name, Prompt.project_id == project_id)
+    )
     prompt = result.scalar_one_or_none()
 
     if not prompt:

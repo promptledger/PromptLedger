@@ -4,18 +4,30 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from prompt_ledger.models.project import Project
 from prompt_ledger.models.prompt import Prompt, PromptVersion, compute_checksum
 from prompt_ledger.services.prompt_service import PromptService
+
+
+@pytest.fixture
+async def default_project(db_session: AsyncSession):
+    """Create and return a default project for prompt service tests."""
+    project = Project(name="default")
+    db_session.add(project)
+    await db_session.flush()
+    return project
 
 
 class TestPromptServiceCodeBased:
     """Test code-based prompt registration."""
 
     @pytest.mark.asyncio
-    async def test_register_new_code_prompt(self, db_session: AsyncSession):
+    async def test_register_new_code_prompt(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test registering a new code-based prompt."""
         # Arrange
-        service = PromptService(db_session)
+        service = PromptService(db_session, project_id=default_project.project_id)
         template = "Hello {{name}}!"
         prompts_data = [
             {
@@ -100,7 +112,9 @@ class TestPromptServiceCodeBased:
         assert result2[0]["previous_version"] == 1
 
     @pytest.mark.asyncio
-    async def test_register_multiple_prompts_at_once(self, db_session: AsyncSession):
+    async def test_register_multiple_prompts_at_once(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test registering multiple prompts in one call."""
         # Arrange
         service = PromptService(db_session)
@@ -128,7 +142,9 @@ class TestPromptServiceCodeBased:
         assert result[1]["version"] == 1
 
     @pytest.mark.asyncio
-    async def test_register_prompt_sets_tracking_mode(self, db_session: AsyncSession):
+    async def test_register_prompt_sets_tracking_mode(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test that registered prompts are set to tracking mode."""
         # Arrange
         service = PromptService(db_session)
@@ -153,7 +169,9 @@ class TestPromptServiceCodeBased:
         assert prompt.mode == "tracking"
 
     @pytest.mark.asyncio
-    async def test_register_sets_active_version(self, db_session: AsyncSession):
+    async def test_register_sets_active_version(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test that registered prompt has active version set."""
         # Arrange
         service = PromptService(db_session)
@@ -182,7 +200,9 @@ class TestModeValidation:
     """Test mode validation logic."""
 
     @pytest.mark.asyncio
-    async def test_validate_full_mode_prompt(self, db_session: AsyncSession):
+    async def test_validate_full_mode_prompt(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test validating full mode prompt."""
         # Arrange
         service = PromptService(db_session)
@@ -196,7 +216,9 @@ class TestModeValidation:
         assert result.mode == "full"
 
     @pytest.mark.asyncio
-    async def test_validate_tracking_mode_prompt(self, db_session: AsyncSession):
+    async def test_validate_tracking_mode_prompt(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test validating tracking mode prompt."""
         # Arrange
         service = PromptService(db_session)
@@ -212,7 +234,9 @@ class TestModeValidation:
         assert result.mode == "tracking"
 
     @pytest.mark.asyncio
-    async def test_validate_mode_mismatch_raises_error(self, db_session: AsyncSession):
+    async def test_validate_mode_mismatch_raises_error(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test mode mismatch raises HTTPException."""
         # Arrange
         service = PromptService(db_session)
@@ -267,7 +291,9 @@ class TestEdgeCases:
     """Test edge cases and error conditions."""
 
     @pytest.mark.asyncio
-    async def test_register_empty_list_returns_empty(self, db_session: AsyncSession):
+    async def test_register_empty_list_returns_empty(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test registering empty list returns empty result."""
         # Arrange
         service = PromptService(db_session)
@@ -279,7 +305,9 @@ class TestEdgeCases:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_version_increment_handles_gaps(self, db_session: AsyncSession):
+    async def test_version_increment_handles_gaps(
+        self, db_session: AsyncSession, default_project
+    ):
         """Test version numbering is sequential even with manual version creation."""
         # Arrange
         service = PromptService(db_session)

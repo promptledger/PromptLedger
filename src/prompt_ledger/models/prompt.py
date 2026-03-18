@@ -35,7 +35,12 @@ class Prompt(Base):
     __tablename__ = "prompts"
 
     prompt_id = Column(PostgresUUID(as_uuid=True), primary_key=True, default=uuid4)
-    name = Column(TEXT, nullable=False, unique=True)
+    project_id = Column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("projects.project_id"),
+        nullable=True,  # nullable until migration backfill; enforced NOT NULL in migration
+    )
+    name = Column(TEXT, nullable=False)
     description = Column(TEXT)
     owner_team = Column(TEXT)
     mode = Column(
@@ -75,8 +80,12 @@ class Prompt(Base):
         "PromptVersion", foreign_keys=[active_version_id], post_update=True
     )
 
-    # Indexes for query optimization
-    __table_args__ = (Index("idx_prompts_mode", "mode"),)
+    # Indexes and constraints
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_project_prompt_name"),
+        Index("idx_prompts_mode", "mode"),
+        Index("idx_prompts_project_id", "project_id"),
+    )
 
 
 class PromptVersion(Base):

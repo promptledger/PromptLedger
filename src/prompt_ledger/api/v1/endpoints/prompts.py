@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from prompt_ledger.api.dependencies import verify_api_key
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.prompt import Prompt, PromptVersion, compute_checksum
 from prompt_ledger.services.prompt_service import PromptService
@@ -14,49 +15,65 @@ from prompt_ledger.services.prompt_service import PromptService
 router = APIRouter()
 
 
+@router.get("", response_model=List[Dict[str, Any]])
+async def list_prompts(
+    db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
+) -> List[Dict[str, Any]]:
+    """List all prompts for the calling project."""
+    result = await db.execute(select(Prompt).where(Prompt.project_id == project_id))
+    prompts = result.scalars().all()
+
+    return [
+        {
+            "prompt_id": str(p.prompt_id),
+            "name": p.name,
+            "mode": p.mode,
+            "description": p.description,
+            "owner_team": p.owner_team,
+            "created_at": p.created_at.isoformat(),
+            "updated_at": p.updated_at.isoformat(),
+        }
+        for p in prompts
+    ]
+
+
 @router.put("/{name}", response_model=Dict[str, Any])
 async def upsert_prompt(
     name: str,
     prompt_data: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
-    """Create or update a prompt in full management mode.
-
-    This endpoint manages prompts in 'full' mode. If you have a code-based
-    (tracking mode) prompt, use POST /v1/prompts/register-code instead.
-    """
-
-    # Extract fields from request
+    """Create or update a prompt in full management mode, scoped to the calling project."""
     template_source = prompt_data.get("template_source", "")
     description = prompt_data.get("description")
     owner_team = prompt_data.get("owner_team")
     created_by = prompt_data.get("created_by")
     set_active = prompt_data.get("set_active", False)
 
-    # Compute checksum
     checksum = compute_checksum(template_source)
 
-    # Find or create prompt
-    result = await db.execute(select(Prompt).where(Prompt.name == name))
+    result = await db.execute(
+        select(Prompt).where(Prompt.name == name, Prompt.project_id == project_id)
+    )
     prompt = result.scalar_one_or_none()
 
-    # Validate mode if prompt exists
     if prompt:
-        service = PromptService(db)
+        service = PromptService(db, project_id)
         await service.validate_mode(name, "full", "PUT operation")
 
     if not prompt:
-        # Create new prompt in full mode
         prompt = Prompt(
             name=name,
             description=description,
             owner_team=owner_team,
-            mode="full",  # Explicitly set to full mode
+            mode="full",
+            project_id=project_id,
         )
         db.add(prompt)
         await db.flush()
 
-    # Check if version already exists
     result = await db.execute(
         select(PromptVersion).where(
             PromptVersion.prompt_id == prompt.prompt_id,
@@ -69,7 +86,6 @@ async def upsert_prompt(
     if existing_version:
         version = existing_version
     else:
-        # Get next version number
         result = await db.execute(
             select(PromptVersion.version_number)
             .where(PromptVersion.prompt_id == prompt.prompt_id)
@@ -79,7 +95,6 @@ async def upsert_prompt(
         max_version = result.scalar_one_or_none()
         next_version = (max_version or 0) + 1
 
-        # Create new version
         version = PromptVersion(
             prompt_id=prompt.prompt_id,
             version_number=next_version,
@@ -92,7 +107,6 @@ async def upsert_prompt(
         version_change = True
         await db.flush()
 
-    # Set as active version if requested
     if set_active:
         prompt.active_version_id = version.version_id
         version.status = "active"
@@ -116,17 +130,17 @@ async def upsert_prompt(
 async def list_prompt_versions(
     name: str,
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> List[Dict[str, Any]]:
-    """List all versions of a prompt."""
-
-    # Find prompt
-    result = await db.execute(select(Prompt).where(Prompt.name == name))
+    """List all versions of a prompt, scoped to the calling project."""
+    result = await db.execute(
+        select(Prompt).where(Prompt.name == name, Prompt.project_id == project_id)
+    )
     prompt = result.scalar_one_or_none()
 
     if not prompt:
         raise HTTPException(status_code=404, detail="Prompt not found")
 
-    # Get versions
     result = await db.execute(
         select(PromptVersion)
         .where(PromptVersion.prompt_id == prompt.prompt_id)
@@ -151,17 +165,18 @@ async def list_prompt_versions(
 async def get_prompt(
     name: str,
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
-    """Get prompt details."""
-
-    # Find prompt with active version
-    result = await db.execute(select(Prompt).where(Prompt.name == name))
+    """Get prompt details, scoped to the calling project."""
+    result = await db.execute(
+        select(Prompt).where(Prompt.name == name, Prompt.project_id == project_id)
+    )
     prompt = result.scalar_one_or_none()
 
     if not prompt:
         raise HTTPException(status_code=404, detail="Prompt not found")
 
-    response = {
+    response: Dict[str, Any] = {
         "prompt_id": str(prompt.prompt_id),
         "name": prompt.name,
         "description": prompt.description,
@@ -170,7 +185,6 @@ async def get_prompt(
         "updated_at": prompt.updated_at.isoformat(),
     }
 
-    # Include active version if exists
     if prompt.active_version_id:
         result = await db.execute(
             select(PromptVersion).where(

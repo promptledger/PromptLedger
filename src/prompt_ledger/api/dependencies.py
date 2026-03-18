@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from prompt_ledger.db.database import get_db
-from prompt_ledger.models.project import ApiKey, hash_api_key
+from prompt_ledger.models.project import ApiKey, Project, hash_api_key
 
 # In-memory cache: key_hash → project_id, TTL=60s.
 # Avoids a DB round-trip on every authenticated request.
@@ -52,4 +52,23 @@ async def verify_api_key(
 
     project_id: UUID = api_key_row.project_id
     _key_cache[key_hash] = project_id
+    return project_id
+
+
+async def require_admin_key(
+    project_id: UUID = Depends(verify_api_key),
+    db: AsyncSession = Depends(get_db),
+) -> UUID:
+    """Require the calling key to belong to the 'default' project.
+
+    Returns the project_id on success. Raises 403 if the authenticated
+    key belongs to any project other than 'default'.
+    """
+    result = await db.execute(select(Project).where(Project.project_id == project_id))
+    project = result.scalar_one_or_none()
+    if project is None or project.name != "default":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access requires the default project key",
+        )
     return project_id

@@ -14,15 +14,12 @@ class PromptService:
     """Service for prompt management operations.
 
     Handles both full management mode and code-based tracking mode prompts.
+    All queries are scoped to the provided project_id.
     """
 
-    def __init__(self, db: AsyncSession):
-        """Initialize service with database session.
-
-        Args:
-            db: Async database session
-        """
+    def __init__(self, db: AsyncSession, project_id: UUID):
         self.db = db
+        self.project_id = project_id
 
     async def register_code_prompts(
         self, prompts: List[Dict[str, Any]], dry_run: bool = False
@@ -44,7 +41,11 @@ class PromptService:
             template_source = prompt_data["template_source"]
             checksum = compute_checksum(template_source)
 
-            result = await self.db.execute(select(Prompt).where(Prompt.name == name))
+            result = await self.db.execute(
+                select(Prompt).where(
+                    Prompt.name == name, Prompt.project_id == self.project_id
+                )
+            )
             prompt = result.scalar_one_or_none()
 
             if not prompt:
@@ -55,7 +56,9 @@ class PromptService:
                 change_detected = True
 
                 if not dry_run:
-                    prompt = Prompt(name=name, mode="tracking")
+                    prompt = Prompt(
+                        name=name, mode="tracking", project_id=self.project_id
+                    )
                     self.db.add(prompt)
                     await self.db.flush()
 
@@ -129,33 +132,17 @@ class PromptService:
     async def validate_mode(
         self, prompt_name: str, expected_mode: str, operation: str
     ) -> Prompt:
-        """Validate prompt mode matches expected mode.
-
-        Enforces mode isolation by ensuring operations are performed on
-        prompts of the correct mode. Raises appropriate HTTP exceptions
-        with helpful error messages.
-
-        Args:
-            prompt_name: Name of the prompt to validate
-            expected_mode: Expected mode ('full' or 'tracking')
-            operation: Description of operation for error message
-
-        Returns:
-            The validated prompt object
+        """Validate prompt mode matches expected mode, scoped to project.
 
         Raises:
-            HTTPException(404): If prompt not found
-            HTTPException(400): If prompt mode doesn't match expected mode
-
-        Example:
-            >>> service = PromptService(db)
-            >>> prompt = await service.validate_mode(
-            ...     "my_prompt", "tracking", "execute operation"
-            ... )
-            >>> # If prompt is in 'full' mode, raises:
-            >>> # HTTPException(400, detail="Prompt 'my_prompt' is in full mode...")
+            HTTPException(404): If prompt not found in this project's namespace.
+            HTTPException(400): If prompt mode doesn't match expected mode.
         """
-        result = await self.db.execute(select(Prompt).where(Prompt.name == prompt_name))
+        result = await self.db.execute(
+            select(Prompt).where(
+                Prompt.name == prompt_name, Prompt.project_id == self.project_id
+            )
+        )
         prompt = result.scalar_one_or_none()
 
         if not prompt:
@@ -165,32 +152,24 @@ class PromptService:
 
         if prompt.mode != expected_mode:
             if expected_mode == "full":
-                # Trying to use full mode endpoint on tracking mode prompt
                 error_msg = (
                     f"Prompt '{prompt_name}' is in {prompt.mode} mode. "
                     f"Use code-based endpoints instead."
                 )
             else:
-                # Trying to use tracking mode endpoint on full mode prompt
                 error_msg = (
                     f"Prompt '{prompt_name}' is in {prompt.mode} mode. "
                     f"Use PUT /v1/prompts/{prompt_name} instead."
                 )
-
             raise HTTPException(status_code=400, detail=error_msg)
 
         return prompt
 
     async def get_prompt_by_name(self, prompt_name: str) -> Optional[Prompt]:
-        """Get prompt by name without mode validation.
-
-        Utility method for retrieving prompts without enforcing mode checks.
-
-        Args:
-            prompt_name: Name of the prompt
-
-        Returns:
-            Prompt object if found, None otherwise
-        """
-        result = await self.db.execute(select(Prompt).where(Prompt.name == prompt_name))
+        """Get prompt by name within this project's namespace."""
+        result = await self.db.execute(
+            select(Prompt).where(
+                Prompt.name == prompt_name, Prompt.project_id == self.project_id
+            )
+        )
         return result.scalar_one_or_none()
