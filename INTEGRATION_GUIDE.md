@@ -23,6 +23,7 @@ another non-OpenAI provider.
 10. [Stateless Span-Passing for Workflow Engines](#stateless-span-passing-for-workflow-engines)
 11. [Guardrail Alert Pattern](#guardrail-alert-pattern)
 12. [API Reference Quick Guide](#api-reference-quick-guide)
+13. [Tool Call Capture](#tool-call-capture)
 
 ---
 
@@ -1186,4 +1187,161 @@ Response: `{"span_id": "<uuid>"}`
 
 ---
 
-*Last updated: March 2026 — Epic 2 (Stories 2.1–2.5: project namespacing, DB-backed API keys, admin API)*
+## Tool Call Capture
+
+Modern agentic workflows spend most of their execution time in tool calls between LLM turns:
+web searches, database lookups, code execution, API calls. Epic 4 adds first-class support
+for logging and monitoring these calls.
+
+### Span hierarchy
+
+```
+trace
+ └── agent-turn span (LLM generation — created by execute())
+      ├── tool call span (kind="tool" — created by log_tool_call())
+      ├── tool call span
+      └── guardrail span (kind="guardrail.check")
+```
+
+Tool call spans sit as children of the agent-turn span that triggered them.
+Use `parent_span_id=result.span_id` (the turn's span ID from `execute()`) when
+calling `log_tool_call()`.
+
+### `log_tool_call()` quick example
+
+```python
+import time
+
+result = await client.execute(
+    prompt_name="paper_agent.turn",
+    messages=[{"role": "user", "content": "Search for climate papers."}],
+    state=state,
+    agent_id="researcher",
+)
+turn_span_id = result.span_id
+
+# Now execute the tool the LLM decided to call
+start = time.perf_counter()
+hits = await my_web_search(query="climate change IPCC")
+duration_ms = int((time.perf_counter() - start) * 1000)
+
+await client.log_tool_call(
+    trace_id=state["trace_id"],
+    tool_name="web_search",
+    tool_args={"query": "climate change IPCC"},
+    tool_result=hits if isinstance(hits, dict) else {"value": hits},
+    success=True,
+    duration_ms=duration_ms,
+    parent_span_id=turn_span_id,
+    agent_id="researcher",
+)
+```
+
+### Canonical SRF wrapper
+
+Use this wrapper function to instrument every tool call consistently:
+
+```python
+import time
+from typing import Any, Awaitable, Callable
+
+
+async def run_traced_tool_call(
+    *,
+    client,
+    trace_id: str,
+    parent_span_id: str | None,
+    tool_name: str,
+    tool_args: dict[str, Any],
+    tool_fn: Callable[..., Awaitable[Any]],
+    agent_id: str | None = None,
+) -> Any:
+    """Execute one tool call and log it to PromptLedger as a kind='tool' span."""
+    start = time.perf_counter()
+
+    try:
+        result = await tool_fn(**tool_args)
+        duration_ms = int((time.perf_counter() - start) * 1000)
+
+        await client.log_tool_call(
+            trace_id=trace_id,
+            parent_span_id=parent_span_id,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_result=result if isinstance(result, dict) else {"value": result},
+            success=True,
+            duration_ms=duration_ms,
+            agent_id=agent_id,
+        )
+        return result
+
+    except Exception as exc:
+        duration_ms = int((time.perf_counter() - start) * 1000)
+
+        await client.log_tool_call(
+            trace_id=trace_id,
+            parent_span_id=parent_span_id,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_result={"error_type": type(exc).__name__},
+            success=False,
+            duration_ms=duration_ms,
+            error_message=str(exc),
+            agent_id=agent_id,
+        )
+        raise
+```
+
+Usage:
+
+```python
+hits = await run_traced_tool_call(
+    client=client,
+    trace_id=state["trace_id"],
+    parent_span_id=turn_span_id,
+    tool_name="web_search",
+    tool_args={"query": "climate change IPCC"},
+    tool_fn=my_web_search,
+    agent_id="researcher",
+)
+```
+
+### Stable tool_name values
+
+Use consistent `tool_name` values across the entire codebase so that
+`GET /v1/analytics/tools` can aggregate error rates and latency correctly:
+
+| Tool | Recommended `tool_name` |
+|---|---|
+| Web / internet search | `web_search` |
+| Database / vector lookup | `db_lookup` |
+| arXiv / paper retrieval | `paper_fetch` |
+| Code execution sandbox | `code_exec` |
+| External REST API call | `api_call` |
+
+### Monitoring with `GET /v1/analytics/tools`
+
+```python
+import httpx
+
+tools = httpx.get(
+    f"{API_URL}/v1/analytics/tools",
+    headers={"X-API-Key": API_KEY},
+).json()
+
+for t in tools:
+    print(
+        f"{t['tool_name']:20s}  calls={t['call_count']:4d}  "
+        f"error_rate={t['error_rate']:.1%}  avg={t['avg_duration_ms']}ms"
+    )
+```
+
+Optional `?from=<ISO-8601>` query parameter limits results to a time window:
+
+```bash
+GET /v1/analytics/tools?from=2026-03-18T00:00:00Z
+```
+
+---
+
+*Last updated: March 2026 — Epic 4 (Stories 4.1–4.4: tool call schema, SDK method, analytics, docs)*

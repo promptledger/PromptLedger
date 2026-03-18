@@ -21,6 +21,7 @@ slowing down development.
 - **Multi-Provider Execution**: OpenAI and Anthropic adapters with extensible factory pattern
 - **Multi-Provider Cost Model**: YAML-backed pricing table with fnmatch glob matching; `total_cost` in analytics and trace summaries
 - **Python SDK**: `pip install promptledger-client` — `AsyncPromptLedgerClient`, `execute()`, contextvars trace helpers, Pydantic models
+- **Structured Tool Call Capture**: First-class `tool_name`, `success`, `tool_args`, `tool_result` fields on `kind="tool"` spans; `client.log_tool_call()` SDK helper; `GET /v1/analytics/tools` for per-tool error rates and latency
 - **Dry-Run Registration**: `POST /v1/prompts/register-code` with `dry_run: true` for CI/CD validation
 - **Async-first Design**: Redis + Celery for production workloads
 - **Full Lineage**: Complete execution tracking and parent-child relationships in Postgres
@@ -278,7 +279,37 @@ print(f"Tokens: {summary['total_prompt_tokens']} in / {summary['total_completion
 
 See [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) for the full Mode 2 walkthrough,
 including the `promptledger-client` SDK, `contextvars` trace propagation,
-CI/CD dry-run recipe, and the guardrail alert pattern.
+CI/CD dry-run recipe, guardrail alert pattern, and tool call capture.
+
+### Structured tool call capture
+
+```python
+import time
+from promptledger_client import AsyncPromptLedgerClient
+
+async with AsyncPromptLedgerClient(base_url=API_URL, api_key=API_KEY) as client:
+    # Log a tool call under an existing trace
+    start = time.perf_counter()
+    result = my_web_search(query="climate change")
+    duration_ms = int((time.perf_counter() - start) * 1000)
+
+    await client.log_tool_call(
+        trace_id="trace-my-workflow-001",
+        tool_name="web_search",
+        tool_args={"query": "climate change"},
+        tool_result=result if isinstance(result, dict) else {"value": result},
+        success=True,
+        duration_ms=duration_ms,
+        parent_span_id=current_turn_span_id,  # child of the current agent turn
+    )
+
+    # Monitor tool reliability across all runs
+    import httpx
+    tools = httpx.get(f"{API_URL}/v1/analytics/tools", headers=HEADERS).json()
+    for t in tools:
+        print(f"{t['tool_name']}: {t['call_count']} calls, "
+              f"error_rate={t['error_rate']:.1%}, avg={t['avg_duration_ms']}ms")
+```
 
 ## Dual-Mode Prompt Management
 
@@ -457,6 +488,12 @@ MIT License - see LICENSE file for details.
 - [x] Admin API — create projects, issue/revoke keys, list key metadata
 - [x] Zero-downtime key rotation; system key protection
 - [x] Full backwards compatibility — existing `API_KEY` env var becomes the default project key
+
+### Epic 4 — Structured Tool Call Capture ✅
+- [x] Story 4.1 — Tool call span schema (`tool_name`, `success`, `tool_args`, `tool_result`; Pydantic validation)
+- [x] Story 4.2 — SDK `log_tool_call()` method
+- [x] Story 4.3 — `GET /v1/analytics/tools` endpoint (error rate + latency per tool)
+- [x] Story 4.4 — Documentation and SRF integration wrapper
 
 ### Longer term
 - [ ] OpenTelemetry export integration

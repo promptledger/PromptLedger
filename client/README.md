@@ -59,8 +59,9 @@ async def main():
 | Method | When to use |
 |---|---|
 | `execute()` | All LLM calls — Mode 1 and Mode 2. PL makes the LLM call, creates the span automatically, returns `response_text` + `span_id`. |
+| `log_tool_call()` | Log a single tool invocation as a `kind='tool'` span. Handles payload construction; use `parent_span_id` to nest it under the current agent-turn span. |
 | `register_code_prompts()` | At service startup to register or version-track prompt templates defined in code. Idempotent. |
-| `log_span()` | Low-level span logging for non-LLM steps: workflow phase spans, guardrail child spans, tool call spans. |
+| `log_span()` | Low-level span logging for non-LLM, non-tool steps: workflow phase spans, guardrail child spans. |
 | `get_trace_summary()` | After a workflow run — retrieve aggregated token usage and cost for a full trace. |
 | `health()` | Health check — returns `True` if the PromptLedger API is reachable. |
 
@@ -143,10 +144,63 @@ from promptledger_client.context import start_trace, current_trace_id, set_paren
 > or Railway sleeping cycles — they do not survive process boundaries.
 > Use the `state` dict pattern with `execute()` instead.
 
+## `log_tool_call()` Reference
+
+```python
+span_id = await client.log_tool_call(
+    trace_id="my-run-001",
+    tool_name="web_search",         # stable name — must match across all call sites
+    tool_args={"query": "climate change"},
+    tool_result={"hits": [...]},
+    success=True,
+    duration_ms=340,
+    parent_span_id=state["last_span_id"],  # usually the current agent-turn span
+    agent_id="researcher",
+)
+```
+
+On failure:
+
+```python
+span_id = await client.log_tool_call(
+    trace_id="my-run-001",
+    tool_name="db_lookup",
+    tool_args={"id": "doc-42"},
+    tool_result={"error_type": "TimeoutError"},
+    success=False,
+    duration_ms=5000,
+    error_message="connection timed out after 5 s",
+    parent_span_id=state["last_span_id"],
+)
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `trace_id` | `str` | yes | Current trace identifier |
+| `tool_name` | `str` | yes | Stable tool name — used to aggregate analytics |
+| `tool_args` | `dict` | yes | Arguments passed to the tool |
+| `tool_result` | `dict` | yes | Return value / output from the tool |
+| `success` | `bool` | yes | Whether the call succeeded |
+| `duration_ms` | `int` | yes | Wall-clock duration of the tool call |
+| `parent_span_id` | `str\|None` | no | ID of the parent span (usually the current agent-turn span) |
+| `error_message` | `str\|None` | no | Human-readable error description when `success=False` |
+| `agent_id` | `str\|None` | no | Agent identifier to attach to the span |
+
+> **Note:** `parent_span_id` should normally be the span ID of the current
+> agent-turn span (i.e., the most recent `result.span_id` returned by
+> `execute()`). This places the tool call as a child of the turn that triggered it.
+
+> **Note:** Use stable, consistent `tool_name` values across the codebase
+> (`web_search`, `db_lookup`, `paper_fetch`, etc.) so that
+> `GET /v1/analytics/tools` can aggregate error rates and latency correctly
+> across all runs.
+
 ## Exceptions
 
 | Exception | When raised |
 |---|---|
 | `AuthError` | 401 — invalid or missing API key |
 | `NotFoundError` | 404 — prompt or trace not found |
-| `PromptLedgerError` | 400, 5xx — validation errors or server errors |
+| `PromptLedgerError` | 400, 422, 5xx — validation errors or server errors |
