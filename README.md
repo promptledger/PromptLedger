@@ -25,6 +25,7 @@ slowing down development.
 - **Async-first Design**: Redis + Celery for production workloads
 - **Full Lineage**: Complete execution tracking and parent-child relationships in Postgres
 - **API Key Auth**: `X-API-Key` header enforced on all `/v1/*` endpoints
+- **Project Namespacing**: DB-backed API keys resolve to a `project_id`; prompts, executions, spans, traces, and analytics are scoped per project
 
 ## Architecture
 
@@ -118,17 +119,54 @@ Prompt Registry & Execution API (FastAPI)
 
 ### Authentication
 
-All endpoints require an API key:
+All `/v1/*` endpoints require an API key:
 ```
 X-API-Key: <your-api-key>
 ```
+
+PromptLedger uses DB-backed API keys:
+- `API_KEY` in the service environment is seeded at startup as the `"default"` project's system key
+- the default-project key is the admin key for `/v1/admin/*`
+- consuming applications should use project-scoped keys issued via the admin API, not the admin key directly
+
+### Create a Project and Issue an Application Key
+
+Use the seeded admin key once to create a project for your consuming application:
+
+```bash
+export PL_URL="http://localhost:8000"
+export PL_ADMIN_KEY="dev-key-change-in-production"
+
+curl -X POST "$PL_URL/v1/admin/projects" \
+  -H "X-API-Key: $PL_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "srf",
+    "key_label": "srf-production"
+  }'
+```
+
+Example response:
+```json
+{
+  "project_id": "3d2b1f88-6b3f-4d88-b29b-c8bb0fd7fe3d",
+  "name": "srf",
+  "api_key": "pl-<one-time-plaintext-key>",
+  "key_id": "0f4c6b18-4db7-4d74-b763-2e67db7ec3e6"
+}
+```
+
+Store the returned `api_key` in the consuming app as `PROMPTLEDGER_API_KEY`. The plaintext
+key is returned once only. If it is lost, issue a replacement key with
+`POST /v1/admin/projects/{project_id}/keys`, update the application, then revoke the old key
+with `DELETE /v1/admin/keys/{key_id}`.
 
 ### Prompt Management
 
 **Create/Update Prompt**
 ```bash
 curl -X PUT "http://localhost:8000/v1/prompts/doc_summarizer" \
-  -H "X-API-Key: dev-key-change-in-production" \
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "description": "Summarize documents",
@@ -142,21 +180,21 @@ curl -X PUT "http://localhost:8000/v1/prompts/doc_summarizer" \
 **Get Prompt**
 ```bash
 curl -X GET "http://localhost:8000/v1/prompts/doc_summarizer" \
-  -H "X-API-Key: dev-key-change-in-production"
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY"
 ```
 
 **List Versions**
 ```bash
 curl -X GET "http://localhost:8000/v1/prompts/doc_summarizer/versions" \
-  -H "X-API-Key: dev-key-change-in-production"
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY"
 ```
 
 ### Execution
 
 **Synchronous Execution**
 ```bash
-curl -X POST "http://localhost:8000/v1/executions:run" \
-  -H "X-API-Key: dev-key-change-in-production" \
+curl -X POST "http://localhost:8000/v1/executions/run" \
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt_name": "doc_summarizer",
@@ -169,8 +207,8 @@ curl -X POST "http://localhost:8000/v1/executions:run" \
 
 **Asynchronous Execution**
 ```bash
-curl -X POST "http://localhost:8000/v1/executions:submit" \
-  -H "X-API-Key: dev-key-change-in-production" \
+curl -X POST "http://localhost:8000/v1/executions/submit" \
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt_name": "doc_summarizer",
@@ -184,7 +222,7 @@ curl -X POST "http://localhost:8000/v1/executions:submit" \
 **Poll Execution Status**
 ```bash
 curl -X GET "http://localhost:8000/v1/executions/{execution_id}" \
-  -H "X-API-Key: dev-key-change-in-production"
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY"
 ```
 
 ## Workflow Execution Tracking (Mode 2)
@@ -251,14 +289,14 @@ CI/CD dry-run recipe, and the guardrail alert pattern.
 ### Mode 1 quick example
 
 ```bash
-# Create a prompt
+# $PROMPTLEDGER_API_KEY is the project-scoped key issued via POST /v1/admin/projects
 curl -X PUT "$API_URL/v1/prompts/doc_summarizer" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY" -H "Content-Type: application/json" \
   -d '{"template_source":"Summarize:\n{{text}}","set_active":true}'
 
 # Execute it (PromptLedger calls the LLM)
-curl -X POST "$API_URL/v1/executions:run" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+curl -X POST "$API_URL/v1/executions/run" \
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY" -H "Content-Type: application/json" \
   -d '{"prompt_name":"doc_summarizer","variables":{"text":"..."},
        "model":{"provider":"anthropic","model_name":"claude-haiku-4-5-20251001"}}'
 ```
@@ -268,13 +306,13 @@ curl -X POST "$API_URL/v1/executions:run" \
 ```bash
 # Register code prompts (idempotent, content-based versioning)
 curl -X POST "$API_URL/v1/prompts/register-code" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY" -H "Content-Type: application/json" \
   -d '{"prompts":[{"name":"summarizer","template_source":"Summarize: {{text}}",
        "template_hash":"<sha256>"}]}'
 
 # Dry-run to check for unregistered changes (CI/CD gate)
 curl -X POST "$API_URL/v1/prompts/register-code" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -H "X-API-Key: $PROMPTLEDGER_API_KEY" -H "Content-Type: application/json" \
   -d '{"prompts":[...],"dry_run":true}'
 ```
 
@@ -287,14 +325,19 @@ curl -X POST "$API_URL/v1/prompts/register-code" \
 | `DATABASE_URL` | PostgreSQL connection URL | `postgresql+asyncpg://postgres:password@localhost:5432/prompt_ledger` |
 | `REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
 | `OPENAI_API_KEY` | OpenAI API key | Required |
-| `API_KEY` | Internal API key for authentication | `dev-key-change-in-production` |
+| `API_KEY` | Admin / default-project key seeded at startup | `dev-key-change-in-production` |
 | `DEBUG` | Enable debug mode | `false` |
+
+`API_KEY` belongs to the PromptLedger deployment itself. Consuming applications should use
+their own project-scoped `PROMPTLEDGER_API_KEY` created via `POST /v1/admin/projects`.
 
 ### Database Schema
 
 The service uses a unified table design that supports both dual-mode prompts and workflow tracking:
 
 **Core Tables:**
+- `projects` - Tenant records; every prompt, execution, and span belongs to one project
+- `api_keys` - SHA-256-hashed API keys scoped to a project; plaintext keys are never stored
 - `prompts` - Prompt definitions with mode indicator ('full' or 'tracking')
 - `prompt_versions` - Versioned prompt templates with checksums
 - `executions` - Unified execution tracking for both modes
@@ -395,22 +438,26 @@ MIT License - see LICENSE file for details.
 
 ## Roadmap
 
-### Epic 1 — Integration Enhancements ✅ (in progress)
+### Epic 1 — Integration Enhancements ✅
 - [x] Story 1.0 — API key auth (`X-API-Key` enforced on all `/v1/*` endpoints)
 - [x] Story 1.1 — Anthropic provider adapter (`claude-haiku-4-5-*`, `claude-sonnet-4-6*`, `claude-opus-4-6*`)
+- [x] Story 1.2 — Official Python SDK (`pip install promptledger-client`)
 - [x] Story 1.3 — `register-code` dry-run and change detection
 - [x] Story 1.4 — Multi-provider cost model (YAML pricing table, `total_cost` in analytics)
-- [x] Story 1.6 — Code-Based Tracking integration guide (this section)
+- [x] Story 1.6 — Code-Based Tracking integration guide
+- [x] Story 1.7 — Span ingestion API (`POST /v1/spans`, `GET /v1/traces/{id}/summary`)
 - [x] Story 1.8 — Execution telemetry (`model_name`, `provider`, `total_cost` in execution responses)
-- [ ] Story 1.2 — Official Python SDK (`pip install promptledger-client`)
-- [ ] Story 1.7 — Span ingestion API (`POST /v1/spans`, `GET /v1/traces/{id}/summary`)
 
-### Epic 2 — Namespacing (deferred)
-- [ ] Project namespacing and multi-tenant API keys
+### Epic 2 — Project Namespacing ✅
+- [x] DB-backed API keys with SHA-256 hashing and 60s TTL cache
+- [x] Named projects; every prompt, execution, and span scoped to a project
+- [x] Admin API — create projects, issue/revoke keys, list key metadata
+- [x] Zero-downtime key rotation; system key protection
+- [x] Full backwards compatibility — existing `API_KEY` env var becomes the default project key
 
 ### Longer term
 - [ ] OpenTelemetry export integration
-- [ ] RBAC and team-based access control
 - [ ] Evaluation and A/B testing framework
 - [ ] Web dashboard and real-time analytics
+- [ ] RBAC and team-based access control
 - [ ] Trace comparison and anomaly detection

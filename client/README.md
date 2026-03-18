@@ -2,6 +2,11 @@
 
 Python client SDK for [PromptLedger](https://github.com/promptledger/PromptLedger) — a prompt registry, execution tracking, and lineage service for GenAI applications.
 
+`AsyncPromptLedgerClient(base_url, api_key)` expects the consuming application's
+project-scoped API key. Do not use the PromptLedger deployment's admin/default-project key
+for normal application traffic. See the main `README.md` for project creation and key
+issuance via `/v1/admin/projects`.
+
 ## Installation
 
 ```bash

@@ -82,6 +82,7 @@ PromptLedger is a production-grade prompt management and observability platform 
 - `POST /v1/executions/run` - Synchronous execution
 - `POST /v1/executions/submit` - Asynchronous execution
 - `GET /v1/analytics/*` - Analytics and metrics
+- `POST /v1/admin/projects` - Create named projects and issue scoped API keys
 
 **Technology:**
 - FastAPI (async Python web framework)
@@ -114,12 +115,25 @@ PromptLedger is a production-grade prompt management and observability platform 
 
 **Core Tables:**
 ```sql
+projects (Epic 2: Multi-Tenancy)
+├── project_id (PK, UUID)
+├── name (unique text)
+└── created_at
+
+api_keys (Epic 2: Multi-Tenancy)
+├── key_id (PK, UUID)
+├── key_hash (SHA-256 of plaintext, unique — plaintext never stored)
+├── project_id (FK → projects)
+├── label (text, human-readable identifier)
+├── is_system_key (bool — seeded env-var keys; cannot be deleted)
+└── created_at
+
 prompts
 ├── prompt_id (PK, UUID)
-├── name (unique)
+├── project_id (FK → projects — all prompts scoped to one project)
+├── name (unique within project via uq_project_prompt_name)
 ├── mode (enum: 'full', 'tracking')
-├── description
-├── owner_team
+├── description, owner_team
 ├── active_version_id (FK)
 └── timestamps
 
@@ -135,24 +149,23 @@ prompt_versions
 
 executions
 ├── execution_id (PK, UUID)
-├── prompt_id (FK)
-├── version_id (FK)
-├── model_id (FK)
+├── project_id (FK → projects — scoped to calling project)
+├── prompt_id (FK), version_id (FK), model_id (FK)
 ├── execution_mode (enum: 'sync', 'async')
 ├── status (enum: 'queued', 'running', 'succeeded', 'failed')
-├── rendered_prompt (text)
+├── rendered_prompt (text), messages_json (JSONB)
 ├── response_text (text)
 ├── telemetry (prompt_tokens, response_tokens, latency_ms)
-├── correlation_id
-├── idempotency_key (unique)
+├── correlation_id, idempotency_key (unique per prompt)
 └── timestamps
 
-spans (FR-001: Workflow Tracking)
+spans
 ├── span_id (PK, UUID)
+├── project_id (FK → projects — scoped to calling project)
 ├── trace_id (string, indexed)
 ├── parent_span_id (FK, self-referential)
-├── execution_id (FK, nullable)
-├── name, kind
+├── execution_id (FK, nullable — 1:1 with Execution when auto-created)
+├── name, kind, agent_id, prompt_name
 ├── start_time, end_time, duration_ms
 ├── status, error_message
 ├── input_data, output_data (JSONB)
@@ -167,6 +180,11 @@ models
 └── created_at
 ```
 
+**Epic 2 namespacing additions:**
+- `projects` and `api_keys` are now part of the data model
+- `prompts` are scoped by `project_id`
+- `executions` and `spans` also carry `project_id`, which is what isolates traces and analytics per project
+
 **Key Design Decisions:**
 
 1. **Unified Schema for Dual Modes**
@@ -174,17 +192,23 @@ models
    - Same execution tracking regardless of source
    - Simplified analytics and reporting
 
-2. **Content-Based Versioning**
+2. **Project Namespacing (Epic 2)**
+   - `projects` is a first-class tenant table
+   - `api_keys` stores SHA-256 hashes only; plaintext keys are returned once and discarded
+   - `prompts` are unique by `(project_id, name)` rather than globally
+   - `executions` and `spans` carry `project_id` so traces and analytics are isolated per project
+
+3. **Content-Based Versioning**
    - SHA-256 checksum on `template_source`
    - Unique constraint: `(prompt_id, checksum_hash)`
    - Automatic deduplication
    - Version increment only on content change
 
-3. **Idempotency & Correlation**
+4. **Idempotency & Correlation**
    - `idempotency_key`: Prevent duplicate executions
    - `correlation_id`: Link related executions across workflows
 
-4. **JSONB for Flexibility**
+5. **JSONB for Flexibility**
    - `execution_inputs.variables_json`: Arbitrary input variables
    - `spans.attributes`: Workflow-specific metadata
    - Balance between schema and flexibility
@@ -385,8 +409,21 @@ span = create_span(
 
 **API Key Authentication:**
 - Header: `X-API-Key`
-- Environment variable: `API_KEY`
-- Default: `dev-key-change-in-production` (insecure)
+- Service env var: `API_KEY` seeds the `"default"` project's system key at startup
+- Consuming applications should use project-scoped keys issued via `POST /v1/admin/projects`
+- Plaintext keys are SHA-256 hashed before lookup and are never stored directly
+
+**Request auth flow:**
+1. Read `X-API-Key`
+2. Compute SHA-256 hash of the presented key
+3. Check the in-memory TTL cache (60 seconds)
+4. On cache miss, look up the hash in `api_keys`
+5. Resolve the key's `project_id` and scope downstream prompt/execution/span/analytics queries to that project
+
+**Admin authorization:**
+- `/v1/admin/*` endpoints require the authenticated key to belong to the `"default"` project
+- non-default project keys receive `403 Forbidden` on admin endpoints
+- system keys (`is_system_key = true`) cannot be deleted; operators rotate them by updating `API_KEY` and restarting the service
 
 **Recommendations for Production:**
 
@@ -395,9 +432,10 @@ span = create_span(
    openssl rand -hex 32
    ```
 
-2. **Implement key rotation**
-   - Support multiple valid keys
-   - Gradual rollover
+2. **Use zero-downtime key rotation**
+   - Issue a replacement project key first
+   - Update the consuming application
+   - Revoke the old key only after the new key is confirmed working
 
 3. **Add rate limiting**
    - Per-key request limits
@@ -649,5 +687,5 @@ span = create_span(
 
 ---
 
-*Last Updated: 2026-01-21*
-*Architecture Version: 1.0*
+*Last Updated: 2026-03-18*
+*Architecture Version: 2.0 — Epic 2: project namespacing, DB-backed API keys, admin API*

@@ -4,7 +4,7 @@
 
 This guide covers both integration modes end-to-end, with particular depth on Mode 2
 (Code-Based Tracking) for developer-owned, Git-first projects that call LLM providers
-directly. Sections 4–10 are the canonical reference for any team using Anthropic or
+directly. Sections 5–11 are the canonical reference for any team using Anthropic or
 another non-OpenAI provider.
 
 ---
@@ -13,15 +13,16 @@ another non-OpenAI provider.
 
 1. [Overview](#overview)
 2. [Prerequisites](#prerequisites)
-3. [Quick Start — Mode 1 (Full Management)](#quick-start--mode-1-full-management)
-4. [When to Choose Mode 2 (Code-Based Tracking)](#when-to-choose-mode-2-code-based-tracking)
-5. [End-to-End Mode 2 Walkthrough](#end-to-end-mode-2-walkthrough)
-6. [CI/CD Dry-Run Recipe](#cicd-dry-run-recipe)
-7. [Graceful Degradation Pattern](#graceful-degradation-pattern)
-8. [Async Patterns — contextvars Isolation](#async-patterns--contextvars-isolation)
-9. [Stateless Span-Passing for Workflow Engines](#stateless-span-passing-for-workflow-engines)
-10. [Guardrail Alert Pattern](#guardrail-alert-pattern)
-11. [API Reference Quick Guide](#api-reference-quick-guide)
+3. [Project Setup](#project-setup)
+4. [Quick Start — Mode 1 (Full Management)](#quick-start--mode-1-full-management)
+5. [When to Choose Mode 2 (Code-Based Tracking)](#when-to-choose-mode-2-code-based-tracking)
+6. [End-to-End Mode 2 Walkthrough](#end-to-end-mode-2-walkthrough)
+7. [CI/CD Dry-Run Recipe](#cicd-dry-run-recipe)
+8. [Graceful Degradation Pattern](#graceful-degradation-pattern)
+9. [Async Patterns — contextvars Isolation](#async-patterns--contextvars-isolation)
+10. [Stateless Span-Passing for Workflow Engines](#stateless-span-passing-for-workflow-engines)
+11. [Guardrail Alert Pattern](#guardrail-alert-pattern)
+12. [API Reference Quick Guide](#api-reference-quick-guide)
 
 ---
 
@@ -46,7 +47,7 @@ tracking, and LLM call lineage.
 
 - Python 3.11+
 - A running PromptLedger instance (local Docker or Railway)
-- `PROMPTLEDGER_API_URL` and `PROMPTLEDGER_API_KEY` environment variables
+- `PROMPTLEDGER_API_URL` and `PROMPTLEDGER_API_KEY` environment variables for the consuming application
 
 ### Start PromptLedger locally
 
@@ -66,6 +67,61 @@ curl http://localhost:8000/health
 
 ---
 
+
+## Project Setup
+
+Before integrating any application, create a dedicated PromptLedger project and issue that
+application its own API key.
+
+### 1. Understand the key types
+
+- `API_KEY` in the PromptLedger deployment environment is the admin / default-project key
+- `PROMPTLEDGER_API_KEY` in a consuming application should be that application's project-scoped key
+- `/v1/admin/*` endpoints require the default-project key, not a non-default project key
+
+### 2. Create a project
+
+```bash
+export PL_URL="http://localhost:8000"
+export PL_ADMIN_KEY="dev-key-change-in-production"
+
+curl -X POST "$PL_URL/v1/admin/projects" \
+  -H "X-API-Key: $PL_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "srf",
+    "key_label": "srf-production"
+  }'
+```
+
+Example response:
+
+```json
+{
+  "project_id": "3d2b1f88-6b3f-4d88-b29b-c8bb0fd7fe3d",
+  "name": "srf",
+  "api_key": "pl-<one-time-plaintext-key>",
+  "key_id": "0f4c6b18-4db7-4d74-b763-2e67db7ec3e6"
+}
+```
+
+Store the returned `api_key` as `PROMPTLEDGER_API_KEY` in the consuming application's
+environment. Plaintext keys are not retrievable later by design.
+
+### 3. Rotate or replace a key
+
+Zero-downtime rotation / recovery flow:
+1. `POST /v1/admin/projects/{project_id}/keys` to issue a replacement key
+2. update the consuming application's `PROMPTLEDGER_API_KEY`
+3. verify normal `/v1/prompts` or `/v1/executions/run` calls succeed with the new key
+4. `DELETE /v1/admin/keys/{key_id}` to revoke the old key
+
+If a key is lost, the recovery path is always "issue a new key". PromptLedger stores only
+the SHA-256 hash, never the plaintext key.
+
+---
+
+
 ## Quick Start — Mode 1 (Full Management)
 
 Use Mode 1 when you want PromptLedger to own the LLM call. Prompts are stored in the
@@ -81,8 +137,10 @@ pip install promptledger-client
 
 ```env
 PROMPTLEDGER_API_URL=http://localhost:8000
-PROMPTLEDGER_API_KEY=your-api-key-here
+PROMPTLEDGER_API_KEY=pl-your-project-scoped-key
 ```
+
+Use a project-scoped key here, not the PromptLedger deployment's admin/default-project key.
 
 ### Create a prompt and execute it
 
@@ -114,7 +172,7 @@ async def main():
 
         # Synchronous execution (PromptLedger calls the LLM)
         response = await http.post(
-            f"{os.environ['PROMPTLEDGER_API_URL']}/v1/executions:run",
+            f"{os.environ['PROMPTLEDGER_API_URL']}/v1/executions/run",
             headers={"X-API-Key": os.environ["PROMPTLEDGER_API_KEY"]},
             json={
                 "prompt_name": "doc_summarizer",
@@ -142,7 +200,7 @@ asyncio.run(main())
 Choose **Mode 2** when any of the following is true:
 
 - **Your LLM provider is not (yet) supported by PromptLedger's execution engine.**
-  Mode 1's `/v1/executions:run` routes calls through PromptLedger's provider adapters.
+  Mode 1's `/v1/executions/run` routes calls through PromptLedger's provider adapters.
   If you call a provider directly — a fine-tuned model behind your own endpoint, a
   local Ollama instance, or any provider without an adapter — Mode 2 is the right choice.
   You keep full control of the LLM call; PromptLedger observes it.
@@ -196,9 +254,12 @@ pip install promptledger-client
 
 ```env
 PROMPTLEDGER_API_URL=https://your-instance.up.railway.app
-PROMPTLEDGER_API_KEY=your-api-key-here
+PROMPTLEDGER_API_KEY=pl-your-project-scoped-key
 ANTHROPIC_API_KEY=sk-ant-...   # held by PromptLedger, not your application
 ```
+
+`PROMPTLEDGER_API_KEY` should be the key issued for this consuming project via
+`POST /v1/admin/projects`.
 
 ### 3. Define your prompts in code
 
@@ -468,6 +529,8 @@ result_text = response.content[0].text
 Use `dry_run: true` on `POST /v1/prompts/register-code` to assert that no unregistered
 prompt changes have slipped into a release branch. The response reports what _would_
 change without writing anything to the database.
+
+In CI, use the consuming project's scoped key, not the PromptLedger admin/default-project key.
 
 ### GitHub Actions step
 
@@ -934,6 +997,9 @@ X-API-Key: <your-api-key>
 
 `GET /health` does **not** require authentication.
 
+For normal application traffic, `<your-api-key>` should be a project-scoped key. Admin
+operations use the default-project key seeded from `API_KEY`.
+
 ### Core endpoints
 
 | Method | Endpoint | Description |
@@ -942,8 +1008,8 @@ X-API-Key: <your-api-key>
 | `PUT` | `/v1/prompts/{name}` | Create or update a prompt (Mode 1) |
 | `GET` | `/v1/prompts/{name}` | Get prompt with active version |
 | `GET` | `/v1/prompts/{name}/versions` | List all versions |
-| `POST` | `/v1/executions:run` | Synchronous LLM execution (Mode 1) |
-| `POST` | `/v1/executions:submit` | Async LLM execution (Mode 1) |
+| `POST` | `/v1/executions/run` | Synchronous LLM execution (Mode 1) |
+| `POST` | `/v1/executions/submit` | Async LLM execution (Mode 1) |
 | `GET` | `/v1/executions/{id}` | Poll execution status |
 | `POST` | `/v1/prompts/register-code` | Register code prompts (Mode 2) |
 | `POST` | `/v1/spans` | Ingest a span from a client (Mode 2) |
@@ -951,8 +1017,11 @@ X-API-Key: <your-api-key>
 | `GET` | `/v1/traces/{trace_id}/summary` | Aggregated cost and token summary |
 | `GET` | `/v1/analytics/prompts` | Prompt execution analytics (both modes) |
 | `GET` | `/v1/analytics/agents` | Cross-trace agent analytics |
+| `POST` | `/v1/admin/projects` | Create a project and issue its first API key |
+| `POST` | `/v1/admin/projects/{project_id}/keys` | Issue a replacement or additional project key |
+| `DELETE` | `/v1/admin/keys/{key_id}` | Revoke a project key |
 
-### `POST /v1/executions:run` — synchronous execution
+### `POST /v1/executions/run` — synchronous execution
 
 **Mode 1 request (PL renders template):**
 ```json
@@ -1009,7 +1078,7 @@ no `span` block was included in the request.
 
 `total_cost` is `null` (not `0.00`) when the model name is not in the pricing table.
 
-### `POST /v1/executions:submit` — async submission response
+### `POST /v1/executions/submit` — async submission response
 
 ```json
 {
@@ -1098,7 +1167,7 @@ Response: `{"span_id": "<uuid>"}`
 
 `total_cost` is `null` (not `0.00`) when any span uses an unrecognised model name.
 
-### `POST /v1/executions:run` — Mode 1 with Anthropic
+### `POST /v1/executions/run` — Mode 1 with Anthropic
 
 ```json
 {
@@ -1117,4 +1186,4 @@ Response: `{"span_id": "<uuid>"}`
 
 ---
 
-*Last updated: March 2026 — Epic 1 (Stories 1.0–1.4, 1.6)*
+*Last updated: March 2026 — Epic 2 (Stories 2.1–2.5: project namespacing, DB-backed API keys, admin API)*
