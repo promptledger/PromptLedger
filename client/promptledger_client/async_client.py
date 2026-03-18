@@ -1,6 +1,6 @@
 """Async HTTP client for the PromptLedger API."""
 
-from typing import List
+from typing import List, Optional
 
 import httpx
 
@@ -73,6 +73,92 @@ class AsyncPromptLedgerClient:
         self._raise_for_status(response)
         return TraceSummary(**response.json())
 
+    async def execute(
+        self,
+        prompt_name: str,
+        *,
+        variables: Optional[dict] = None,
+        messages: Optional[list] = None,
+        mode: str = "mode2",
+        model: Optional[str] = None,
+        state: Optional[dict] = None,
+        agent_id: Optional[str] = None,
+        max_tokens: int = 1024,
+        temperature: Optional[float] = None,
+    ) -> "ExecutionResult":
+        """Execute a prompt synchronously and return an ExecutionResult.
+
+        Args:
+            prompt_name: Name of the registered prompt.
+            variables: Template variables for full-mode prompts.
+            messages: Pre-built messages list for tracking-mode prompts.
+            mode: Execution mode (unused server-side; for SDK compatibility).
+            model: Model name override (not currently used by server).
+            state: Mutable state dict for span tracking. If provided, must have
+                ``trace_id``. Optionally has ``phase_span_id`` which becomes
+                ``parent_span_id``. After execution, ``last_span_id`` is written back.
+            agent_id: Agent identifier to attach to the auto-span.
+            max_tokens: Maximum tokens for the generation.
+            temperature: Sampling temperature.
+
+        Returns:
+            ExecutionResult with response_text, telemetry and optional span_id.
+
+        Raises:
+            PromptLedgerError: On 400 or 5xx responses.
+            NotFoundError: On 404 responses.
+            AuthError: On 401 responses.
+        """
+        from .execution import ExecutionResult, ExecutionTelemetry
+
+        body: dict = {
+            "prompt_name": prompt_name,
+            "mode": mode,
+            "params": {"max_tokens": max_tokens},
+        }
+
+        if variables is not None:
+            body["variables"] = variables
+        if messages is not None:
+            body["messages"] = messages
+        if model is not None:
+            body["model"] = model
+        if temperature is not None:
+            body["params"]["temperature"] = temperature
+        if agent_id is not None:
+            body.setdefault("span", {})["agent_id"] = agent_id
+
+        if state is not None:
+            span_block = body.setdefault("span", {})
+            span_block["trace_id"] = state["trace_id"]
+            if "phase_span_id" in state:
+                span_block["parent_span_id"] = state["phase_span_id"]
+
+        response = await self._http.post("/v1/executions/run", json=body)
+        self._raise_for_status(response)
+        data = response.json()
+
+        tel = data.get("telemetry", {})
+        result = ExecutionResult(
+            execution_id=data["execution_id"],
+            status=data["status"],
+            response_text=data["response_text"],
+            span_id=data.get("span_id"),
+            telemetry=ExecutionTelemetry(
+                prompt_tokens=tel.get("prompt_tokens", 0),
+                completion_tokens=tel.get("response_tokens", 0),
+                latency_ms=tel.get("latency_ms", 0),
+                model_name=tel.get("model_name", ""),
+                provider=tel.get("provider", ""),
+                total_cost=tel.get("total_cost"),
+            ),
+        )
+
+        if state is not None and result.span_id:
+            state["last_span_id"] = result.span_id
+
+        return result
+
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._http.aclose()
@@ -92,6 +178,9 @@ class AsyncPromptLedgerClient:
     # ------------------------------------------------------------------
 
     def _raise_for_status(self, response: httpx.Response) -> None:
+        if response.status_code == 400:
+            detail = response.json().get("detail", response.text)
+            raise PromptLedgerError(f"Bad request: {detail}")
         if response.status_code == 401:
             raise AuthError("Invalid or missing API key")
         if response.status_code == 404:

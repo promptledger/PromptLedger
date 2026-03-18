@@ -17,6 +17,7 @@ Quick start::
 from .async_client import AsyncPromptLedgerClient
 from .client import PromptLedgerClient
 from .exceptions import AuthError, NotFoundError, PromptLedgerError
+from .execution import ExecutionResult, ExecutionTelemetry
 from .models import RegisterResult, RegistrationPayload, SpanPayload, TraceSummary
 
 __version__ = "0.1.0"
@@ -31,4 +32,6 @@ __all__ = [
     "PromptLedgerError",
     "AuthError",
     "NotFoundError",
+    "ExecutionResult",
+    "ExecutionTelemetry",
 ]

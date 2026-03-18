@@ -29,7 +29,10 @@ async def run_execution_sync(
     """Execute a prompt synchronously."""
 
     service = ExecutionService(db)
-    result = await service.execute_sync(execution_request)
+    try:
+        result = await service.execute_sync(execution_request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return result
 
 

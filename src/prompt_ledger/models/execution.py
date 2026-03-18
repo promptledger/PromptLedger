@@ -68,7 +68,8 @@ class Execution(Base):
     idempotency_key = Column(String(100))
 
     # Content
-    rendered_prompt = Column(Text, nullable=False)
+    rendered_prompt = Column(Text, nullable=True)
+    messages_json = Column(JSONB, nullable=True)
     response_text = Column(Text)
 
     # Parameters

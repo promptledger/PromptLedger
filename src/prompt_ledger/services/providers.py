@@ -17,14 +17,19 @@ class ProviderAdapter(ABC):
 
     @abstractmethod
     async def generate(
-        self, rendered_prompt: str, model_name: str, params: Dict[str, Any]
+        self,
+        rendered_prompt: Optional[str],
+        model_name: str,
+        params: Dict[str, Any],
+        messages: Optional[list] = None,
     ) -> Dict[str, Any]:
         """Generate response from AI provider.
 
         Args:
-            rendered_prompt: The rendered prompt template
+            rendered_prompt: The rendered prompt template (None when messages provided)
             model_name: Name of the model to use
             params: Generation parameters
+            messages: Optional pre-built messages list (overrides rendered_prompt)
 
         Returns:
             Dictionary containing:
@@ -44,16 +49,26 @@ class OpenAIAdapter(ProviderAdapter):
         self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
 
     async def generate(
-        self, rendered_prompt: str, model_name: str, params: Dict[str, Any]
+        self,
+        rendered_prompt: Optional[str],
+        model_name: str,
+        params: Dict[str, Any],
+        messages: Optional[list] = None,
     ) -> Dict[str, Any]:
         """Generate response using OpenAI API."""
 
         start_time = time.time()
 
+        final_messages = (
+            messages
+            if messages is not None
+            else [{"role": "user", "content": rendered_prompt}]
+        )
+
         # Prepare request parameters
         request_params = {
             "model": model_name,
-            "messages": [{"role": "user", "content": rendered_prompt}],
+            "messages": final_messages,
         }
 
         # Add optional parameters
@@ -97,15 +112,25 @@ class AnthropicAdapter(ProviderAdapter):
         self.client = AsyncAnthropic(api_key=resolved_key)
 
     async def generate(
-        self, rendered_prompt: str, model_name: str, params: Dict[str, Any]
+        self,
+        rendered_prompt: Optional[str],
+        model_name: str,
+        params: Dict[str, Any],
+        messages: Optional[list] = None,
     ) -> Dict[str, Any]:
         """Generate response using Anthropic Messages API."""
         start_time = time.time()
 
+        final_messages = (
+            messages
+            if messages is not None
+            else [{"role": "user", "content": rendered_prompt}]
+        )
+
         request_params: Dict[str, Any] = {
             "model": model_name,
             "max_tokens": params.get("max_tokens", 1024),
-            "messages": [{"role": "user", "content": rendered_prompt}],
+            "messages": final_messages,
         }
 
         if "temperature" in params:

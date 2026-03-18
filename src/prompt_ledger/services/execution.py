@@ -1,5 +1,6 @@
 """Execution service for handling prompt execution."""
 
+import logging
 import time
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
@@ -15,6 +16,7 @@ from prompt_ledger.services.pricing import PricingTable
 from prompt_ledger.services.providers import ProviderAdapterFactory
 
 _pricing_table = PricingTable.default()
+log = logging.getLogger(__name__)
 
 
 class ExecutionService:
@@ -30,10 +32,31 @@ class ExecutionService:
         # Resolve prompt and version
         prompt, version, model = await self._resolve_execution_context(request)
 
-        # Render prompt
-        rendered_prompt, variables = await self._render_prompt(
-            version.template_source, request.get("variables", {})
-        )
+        # Determine input mode: messages vs rendered prompt
+        messages = request.get("messages")
+        variables = request.get("variables")
+
+        # Validate input combinations
+        if messages is not None and prompt.mode == "full":
+            raise ValueError(
+                "messages input not allowed for full-mode prompts — use variables"
+            )
+
+        if messages is not None and len(messages) == 0:
+            raise ValueError("messages array must not be empty")
+
+        if messages is None and prompt.mode == "tracking" and not variables:
+            raise ValueError("variables or messages required for tracking-mode prompts")
+
+        if messages is not None:
+            # Messages path: skip template rendering
+            rendered_prompt = None
+            used_variables: Dict[str, Any] = {}
+        else:
+            # Variables path: render Jinja2 template
+            rendered_prompt, used_variables = await self._render_prompt(
+                version.template_source, variables or {}
+            )
 
         # Create execution record
         execution = await self._create_execution(
@@ -41,7 +64,8 @@ class ExecutionService:
             version=version,
             model=model,
             rendered_prompt=rendered_prompt,
-            variables=variables,
+            messages=messages,
+            variables=used_variables,
             mode="sync",
             request=request,
         )
@@ -55,6 +79,7 @@ class ExecutionService:
                 rendered_prompt=rendered_prompt,
                 model_name=model.model_name,
                 params=request.get("params", {}),
+                messages=messages,
             )
 
             # Update execution with results
@@ -72,6 +97,14 @@ class ExecutionService:
             execution.completed_at = func.now()
             raise
 
+        # Create auto-span if span block provided
+        span = None
+        if request.get("span"):
+            try:
+                span = await self._create_span_for_execution(execution, request, result)
+            except Exception as exc:
+                log.warning("Failed to create auto-span: %s", exc)
+
         await self.db.commit()
 
         total_cost = _pricing_table.calculate_cost(
@@ -85,6 +118,7 @@ class ExecutionService:
             "status": execution.status,
             "mode": execution.execution_mode,
             "response_text": execution.response_text,
+            "span_id": str(span.span_id) if span else None,
             "telemetry": {
                 "prompt_tokens": execution.prompt_tokens,
                 "response_tokens": execution.response_tokens,
@@ -112,6 +146,7 @@ class ExecutionService:
             version=version,
             model=model,
             rendered_prompt=rendered_prompt,
+            messages=None,
             variables=variables,
             mode="async",
             request=request,
@@ -169,7 +204,7 @@ class ExecutionService:
             version = result.scalar_one_or_none()
 
         if not version:
-            raise ValueError(f"Prompt version not found")
+            raise ValueError("Prompt version not found")
 
         # Find model
         result = await self.db.execute(
@@ -205,7 +240,8 @@ class ExecutionService:
         prompt: Prompt,
         version: PromptVersion,
         model: Model,
-        rendered_prompt: str,
+        rendered_prompt: Optional[str],
+        messages: Optional[list],
         variables: Dict[str, Any],
         mode: str,
         request: Dict[str, Any],
@@ -223,6 +259,7 @@ class ExecutionService:
             correlation_id=request.get("correlation_id"),
             idempotency_key=request.get("idempotency_key"),
             rendered_prompt=rendered_prompt,
+            messages_json=messages,
             temperature=request.get("params", {}).get("temperature"),
             top_k=request.get("params", {}).get("top_k"),
             top_p=request.get("params", {}).get("top_p"),
@@ -242,3 +279,47 @@ class ExecutionService:
 
         await self.db.flush()
         return execution
+
+    async def _create_span_for_execution(
+        self,
+        execution: Execution,
+        request: Dict[str, Any],
+        result: Dict[str, Any],
+    ):
+        """Create an auto-span linked to this execution (FR-003)."""
+        from prompt_ledger.models.span import Span
+
+        span_block = request.get("span", {})
+        trace_id = span_block.get("trace_id")
+        if not trace_id:
+            return None
+
+        parent_span_id = span_block.get("parent_span_id")
+        if parent_span_id:
+            from uuid import UUID as _UUID
+
+            parent_span_id = _UUID(parent_span_id)
+
+        span = Span(
+            trace_id=trace_id,
+            parent_span_id=parent_span_id,
+            name=request["prompt_name"],
+            kind=span_block.get("kind", "llm.generation"),
+            status="ok",
+            agent_id=span_block.get("agent_id"),
+            prompt_name=request["prompt_name"],
+            model=execution.model_name,
+            prompt_tokens=execution.prompt_tokens,
+            completion_tokens=execution.response_tokens,
+            duration_ms=execution.latency_ms,
+            input_data=(
+                {"messages": request.get("messages")}
+                if request.get("messages")
+                else {"rendered_prompt": execution.rendered_prompt}
+            ),
+            output_data={"response_text": execution.response_text},
+            execution_id=execution.execution_id,
+        )
+        self.db.add(span)
+        await self.db.flush()
+        return span
