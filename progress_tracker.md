@@ -4,6 +4,44 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-18] - Epic 4 (Stories 4.1–4.4): Structured Tool Call Capture
+
+### Summary
+- **Story 4.1** (schema + migration):
+  - NEW `src/prompt_ledger/api/v1/schemas.py` — `SpanRequest` Pydantic model with `model_validator` enforcing `kind="tool"` ↔ `tool_name` parity (422 on violations)
+  - MODIFY `src/prompt_ledger/models/span.py` — added `tool_name` (indexed String 200), `success` (Boolean), `tool_args` (JSONB), `tool_result` (JSONB)
+  - NEW `alembic/versions/a4b5c6d7e8f9_add_tool_call_fields_to_spans.py` — nullable columns + `idx_span_tool_name`
+  - MODIFY `src/prompt_ledger/api/v1/endpoints/spans.py` — `ingest_span` now uses `SpanRequest`; `_span_to_dict` returns tool fields; `error_message` persisted from payload
+  - NEW `tests/unit/test_span_schema.py` — 6 unit tests (all GREEN)
+  - NEW `tests/integration/test_spans.py` — 6 integration tests (all GREEN)
+- **Story 4.2** (SDK `log_tool_call()`):
+  - MODIFY `client/promptledger_client/async_client.py` — `log_tool_call()` method; `_raise_for_status` now handles 422
+  - MODIFY `client/promptledger_client/client.py` — sync wrapper
+  - MODIFY `client/tests/test_async_client.py` — 4 new tests + parity check (all GREEN, 17 total)
+- **Story 4.3** (`GET /v1/analytics/tools`):
+  - MODIFY `src/prompt_ledger/api/v1/endpoints/analytics.py` — `get_tool_analytics()` endpoint; groups by `tool_name`; returns `call_count`, `error_rate`, `avg_duration_ms`; optional `?from=` ISO-8601 filter; project-scoped
+  - NEW `tests/integration/test_analytics_tools.py` — 5 integration tests (all GREEN)
+- **Story 4.4** (docs):
+  - `README.md` — added feature bullet, tool span quick example, Epic 4 roadmap
+  - `INTEGRATION_GUIDE.md` — Section 13 with hierarchy diagram, quick example, canonical `run_traced_tool_call()` wrapper, stable `tool_name` table, analytics monitoring
+  - `client/README.md` — `log_tool_call()` in Core Methods table; full parameter reference
+
+### Decisions
+- `tool_name` and `success` stored as real columns (not JSONB) for queryable analytics — consistent with architecture decision in FR-004
+- `schemas.py` created as a new file (`src/prompt_ledger/api/v1/schemas.py`) — gives the project a clean home for future Pydantic request schemas
+- 422 responses from `_raise_for_status` (async_client) now raise `PromptLedgerError` — consistent with 400 handling
+- `run_traced_tool_call()` wrapper included in docs only (not in SDK) — it's a pattern helper, not a library primitive
+
+### Issues & Resolution
+- Pre-commit black hook scans all Python files including untracked ones, causing failures until `admin.py` (Codex's Story 2.4 file) was staged alongside the Story 4.1 files
+- Standard re-stage-after-black pattern applied for all commits
+
+### Next Steps
+- [ ] Run full test suite with Docker to confirm all DB-backed tests GREEN
+- [ ] Push to Railway and run migration `alembic upgrade head`
+
+---
+
 ## [2026-03-18] - Epic 2 Story 2.4: Admin API for project and key management
 
 ### Summary
