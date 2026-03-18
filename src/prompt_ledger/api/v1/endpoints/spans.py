@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from prompt_ledger.api.dependencies import verify_api_key
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.span import Span
 from prompt_ledger.services.pricing import PricingTable
@@ -148,6 +149,7 @@ def _build_trace_summary(
 async def ingest_span(
     payload: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Ingest one span from a client (Mode 2 observability).
 
@@ -189,6 +191,7 @@ async def ingest_span(
         input_data=payload.get("input_data"),
         output_data=payload.get("output_data"),
         attributes=payload.get("attributes"),
+        project_id=project_id,
     )
 
     db.add(span)
@@ -202,10 +205,13 @@ async def ingest_span(
 async def get_trace(
     trace_id: str,
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Retrieve all spans for a trace as a parent/child tree."""
     result = await db.execute(
-        select(Span).where(Span.trace_id == trace_id).order_by(Span.start_time)
+        select(Span)
+        .where(Span.trace_id == trace_id, Span.project_id == project_id)
+        .order_by(Span.start_time)
     )
     spans = result.scalars().all()
 
@@ -230,10 +236,13 @@ async def get_trace(
 async def get_trace_summary(
     trace_id: str,
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Aggregated cost and token summary for a trace, broken down by agent."""
     result = await db.execute(
-        select(Span).where(Span.trace_id == trace_id).order_by(Span.start_time)
+        select(Span)
+        .where(Span.trace_id == trace_id, Span.project_id == project_id)
+        .order_by(Span.start_time)
     )
     spans = result.scalars().all()
 

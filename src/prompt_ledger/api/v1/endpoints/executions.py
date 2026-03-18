@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from prompt_ledger.api.dependencies import verify_api_key
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.execution import Execution, ExecutionInput
 from prompt_ledger.models.model import Model
@@ -25,10 +26,11 @@ router = APIRouter()
 async def run_execution_sync(
     execution_request: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Execute a prompt synchronously."""
 
-    service = ExecutionService(db)
+    service = ExecutionService(db, project_id=project_id)
     try:
         result = await service.execute_sync(execution_request)
     except ValueError as exc:
@@ -40,10 +42,11 @@ async def run_execution_sync(
 async def submit_execution_async(
     execution_request: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Submit a prompt for asynchronous execution."""
 
-    service = ExecutionService(db)
+    service = ExecutionService(db, project_id=project_id)
     result = await service.submit_async(execution_request)
     return result
 
@@ -52,6 +55,7 @@ async def submit_execution_async(
 async def get_execution(
     execution_id: str = Path(..., description="Execution ID"),
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Get execution status and results."""
 
@@ -62,7 +66,7 @@ async def get_execution(
 
     result = await db.execute(
         select(Execution)
-        .where(Execution.execution_id == uuid_obj)
+        .where(Execution.execution_id == uuid_obj, Execution.project_id == project_id)
         .options(
             # Eager load relationships
             selectinload(Execution.prompt),
@@ -125,6 +129,7 @@ async def list_executions(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """List executions with optional filtering."""
     from sqlalchemy.orm import selectinload
@@ -132,6 +137,7 @@ async def list_executions(
     query = (
         select(Execution)
         .options(selectinload(Execution.prompt))
+        .where(Execution.project_id == project_id)
         .order_by(Execution.created_at.desc())
     )
 

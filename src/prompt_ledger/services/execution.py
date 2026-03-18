@@ -3,7 +3,7 @@
 import logging
 import time
 from typing import Any, Dict, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from jinja2 import Environment, StrictUndefined, TemplateError, UndefinedError
 from sqlalchemy import func, select
@@ -22,8 +22,9 @@ log = logging.getLogger(__name__)
 class ExecutionService:
     """Service for managing prompt executions."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, project_id: Optional[UUID] = None):
         self.db = db
+        self.project_id = project_id
         self.provider_factory = ProviderAdapterFactory()
 
     async def execute_sync(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -253,6 +254,7 @@ class ExecutionService:
             version_id=version.version_id,
             model_id=model.model_id,
             model_name=model.model_name,
+            project_id=self.project_id,
             environment=request.get("environment", "dev"),
             execution_mode=mode,
             status="queued" if mode == "async" else "running",
@@ -319,6 +321,7 @@ class ExecutionService:
             ),
             output_data={"response_text": execution.response_text},
             execution_id=execution.execution_id,
+            project_id=self.project_id,
         )
         self.db.add(span)
         await self.db.flush()

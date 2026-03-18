@@ -68,6 +68,13 @@ class Span(Base):
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
 
+    # Project scoping (Story 2.3 — nullable for migration compatibility)
+    project_id = Column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("projects.project_id"),
+        nullable=True,
+    )
+
     # Link to Execution (nullable - only for PromptLedger executions)
     execution_id = Column(
         PostgresUUID(as_uuid=True),
@@ -94,6 +101,7 @@ class Span(Base):
         Index("idx_span_parent_id", "parent_span_id"),
         Index("idx_span_execution_id", "execution_id"),
         Index("idx_span_trace_start", "trace_id", "start_time"),
+        Index("idx_span_project_id", "project_id"),
     )
 
     def __repr__(self) -> str:

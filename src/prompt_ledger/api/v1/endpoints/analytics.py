@@ -1,11 +1,13 @@
 """Analytics endpoints for unified reporting across modes."""
 
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from prompt_ledger.api.dependencies import verify_api_key
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.execution import Execution
 from prompt_ledger.models.model import Model
@@ -39,13 +41,16 @@ def _compute_total_cost(model_token_rows: List) -> Optional[float]:
 
 
 async def _cost_by_mode(
-    db: AsyncSession, mode: Optional[str] = None
+    db: AsyncSession,
+    project_id: UUID,
+    mode: Optional[str] = None,
 ) -> Optional[float]:
     """Query token totals grouped by model name and compute total cost.
 
     Args:
-        db:   Async DB session.
-        mode: Prompt mode filter ('full' or 'tracking').  None = all modes.
+        db:         Async DB session.
+        project_id: Scope results to this project.
+        mode:       Prompt mode filter ('full' or 'tracking').  None = all modes.
     """
     query = (
         select(
@@ -55,6 +60,7 @@ async def _cost_by_mode(
         )
         .join(Model, Model.model_id == Execution.model_id)
         .join(Prompt, Prompt.prompt_id == Execution.prompt_id)
+        .where(Execution.project_id == project_id)
         .group_by(Model.model_name)
     )
     if mode is not None:
@@ -69,6 +75,7 @@ async def _cost_by_mode(
 async def get_prompts_analytics(
     mode: str = Query("all", pattern="^(all|full|tracking)$"),
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Get unified analytics across both prompt modes.
 
@@ -108,44 +115,52 @@ async def get_prompts_analytics(
         Analytics data aggregated by mode
     """
     if mode == "all":
-        # Total execution count
-        total_result = await db.execute(select(func.count(Execution.execution_id)))
+        # Total execution count (scoped to project)
+        total_result = await db.execute(
+            select(func.count(Execution.execution_id)).where(
+                Execution.project_id == project_id
+            )
+        )
         total_executions = total_result.scalar() or 0
 
-        # Count prompts by mode
+        # Count prompts by mode (scoped to project)
         full_count_result = await db.execute(
-            select(func.count(Prompt.prompt_id)).where(Prompt.mode == "full")
+            select(func.count(Prompt.prompt_id)).where(
+                Prompt.mode == "full", Prompt.project_id == project_id
+            )
         )
         full_prompts = full_count_result.scalar() or 0
 
         tracking_count_result = await db.execute(
-            select(func.count(Prompt.prompt_id)).where(Prompt.mode == "tracking")
+            select(func.count(Prompt.prompt_id)).where(
+                Prompt.mode == "tracking", Prompt.project_id == project_id
+            )
         )
         tracking_prompts = tracking_count_result.scalar() or 0
 
-        # Execution stats by mode - full
+        # Execution stats by mode - full (scoped to project)
         full_exec_result = await db.execute(
             select(
                 func.count(Execution.execution_id).label("count"),
                 func.avg(Execution.latency_ms).label("avg_latency"),
             )
             .join(Prompt, Prompt.prompt_id == Execution.prompt_id)
-            .where(Prompt.mode == "full")
+            .where(Prompt.mode == "full", Execution.project_id == project_id)
         )
         full_stats = full_exec_result.first()
 
-        # Execution stats by mode - tracking
+        # Execution stats by mode - tracking (scoped to project)
         tracking_exec_result = await db.execute(
             select(
                 func.count(Execution.execution_id).label("count"),
                 func.avg(Execution.latency_ms).label("avg_latency"),
             )
             .join(Prompt, Prompt.prompt_id == Execution.prompt_id)
-            .where(Prompt.mode == "tracking")
+            .where(Prompt.mode == "tracking", Execution.project_id == project_id)
         )
         tracking_stats = tracking_exec_result.first()
 
-        total_cost = await _cost_by_mode(db, mode=None)
+        total_cost = await _cost_by_mode(db, project_id=project_id, mode=None)
 
         return {
             "summary": {
@@ -168,13 +183,15 @@ async def get_prompts_analytics(
 
     else:
         # Mode-specific analytics
-        # Count prompts in this mode
+        # Count prompts in this mode (scoped to project)
         prompt_count_result = await db.execute(
-            select(func.count(Prompt.prompt_id)).where(Prompt.mode == mode)
+            select(func.count(Prompt.prompt_id)).where(
+                Prompt.mode == mode, Prompt.project_id == project_id
+            )
         )
         prompt_count = prompt_count_result.scalar() or 0
 
-        # Execution stats for this mode
+        # Execution stats for this mode (scoped to project)
         exec_stats_result = await db.execute(
             select(
                 func.count(Execution.execution_id).label("count"),
@@ -183,11 +200,11 @@ async def get_prompts_analytics(
                 func.sum(Execution.response_tokens).label("total_response_tokens"),
             )
             .join(Prompt, Prompt.prompt_id == Execution.prompt_id)
-            .where(Prompt.mode == mode)
+            .where(Prompt.mode == mode, Execution.project_id == project_id)
         )
         stats = exec_stats_result.first()
 
-        total_cost = await _cost_by_mode(db, mode=mode)
+        total_cost = await _cost_by_mode(db, project_id=project_id, mode=mode)
 
         return {
             "mode": mode,
@@ -206,6 +223,7 @@ async def get_agent_analytics(
         None, description="Filter by span kind (e.g. guardrail.check)"
     ),
     db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
     """Cross-trace agent analytics — aggregate stats grouped by agent_id.
 
@@ -221,7 +239,7 @@ async def get_agent_analytics(
             func.sum(Span.prompt_tokens).label("total_prompt_tokens"),
             func.sum(Span.completion_tokens).label("total_completion_tokens"),
         )
-        .where(Span.agent_id.isnot(None))
+        .where(Span.agent_id.isnot(None), Span.project_id == project_id)
         .group_by(Span.agent_id)
         .order_by(func.count(Span.span_id).desc())
     )

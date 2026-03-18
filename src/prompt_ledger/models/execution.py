@@ -32,6 +32,13 @@ class Execution(Base):
 
     execution_id = Column(PostgresUUID(as_uuid=True), primary_key=True, default=uuid4)
 
+    # Project scoping (Story 2.3 — nullable for migration compatibility)
+    project_id = Column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("projects.project_id"),
+        nullable=True,
+    )
+
     # Foreign keys
     prompt_id = Column(
         PostgresUUID(as_uuid=True), ForeignKey("prompts.prompt_id"), nullable=False
@@ -106,6 +113,7 @@ class Execution(Base):
 
     # Indexes
     __table_args__ = (
+        Index("idx_exec_project_id", "project_id"),
         Index("idx_exec_prompt_time", "prompt_id", desc("created_at")),
         Index("idx_exec_version_time", "version_id", desc("created_at")),
         Index("idx_exec_status_time", "status", desc("created_at")),

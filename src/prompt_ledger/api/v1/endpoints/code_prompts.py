@@ -176,7 +176,7 @@ async def execute_code_prompt(
     }
 
     # Execute based on mode
-    execution_service = ExecutionService(db)
+    execution_service = ExecutionService(db, project_id=project_id)
     mode = request.get("mode", "sync")
 
     if mode == "sync":
