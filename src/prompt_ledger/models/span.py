@@ -4,7 +4,16 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.orm import relationship
@@ -68,6 +77,12 @@ class Span(Base):
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
 
+    # Tool call fields (Story 4.1 — only populated for kind="tool" spans)
+    tool_name = Column(String(200), nullable=True)
+    success = Column(Boolean, nullable=True)
+    tool_args = Column(JSONB, nullable=True)
+    tool_result = Column(JSONB, nullable=True)
+
     # Project scoping (Story 2.3 — nullable for migration compatibility)
     project_id = Column(
         PostgresUUID(as_uuid=True),
@@ -102,6 +117,7 @@ class Span(Base):
         Index("idx_span_execution_id", "execution_id"),
         Index("idx_span_trace_start", "trace_id", "start_time"),
         Index("idx_span_project_id", "project_id"),
+        Index("idx_span_tool_name", "tool_name"),
     )
 
     def __repr__(self) -> str:

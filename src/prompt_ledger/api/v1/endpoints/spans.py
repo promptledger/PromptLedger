@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from prompt_ledger.api.dependencies import verify_api_key
+from prompt_ledger.api.v1.schemas import SpanRequest
 from prompt_ledger.db.database import get_db
 from prompt_ledger.models.span import Span
 from prompt_ledger.services.pricing import PricingTable
@@ -41,6 +42,10 @@ def _span_to_dict(span: Span) -> Dict[str, Any]:
         "prompt_tokens": span.prompt_tokens,
         "completion_tokens": span.completion_tokens,
         "attributes": span.attributes,
+        "tool_name": span.tool_name,
+        "success": span.success,
+        "tool_args": span.tool_args,
+        "tool_result": span.tool_result,
         "children": [],
     }
 
@@ -147,7 +152,7 @@ def _build_trace_summary(
     "", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any]
 )
 async def ingest_span(
-    payload: Dict[str, Any],
+    payload: SpanRequest,
     db: AsyncSession = Depends(get_db),
     project_id: UUID = Depends(verify_api_key),
 ) -> Dict[str, Any]:
@@ -155,42 +160,39 @@ async def ingest_span(
 
     Accepts an OpenTelemetry-style span payload and writes it to the spans
     table. Returns the assigned span_id.
+
+    When kind == "tool", the tool_name field is required. Non-tool spans
+    that include tool_name are rejected with a 422.
     """
-    trace_id = payload.get("trace_id")
-    if not trace_id:
-        raise HTTPException(status_code=400, detail="trace_id is required")
-
-    name = payload.get("name")
-    if not name:
-        raise HTTPException(status_code=400, detail="name is required")
-
-    kind = payload.get("kind", "llm.generation")
-
-    parent_span_id = payload.get("parent_span_id")
     parent_uuid: Optional[UUID] = None
-    if parent_span_id:
+    if payload.parent_span_id:
         try:
-            parent_uuid = UUID(str(parent_span_id))
+            parent_uuid = UUID(str(payload.parent_span_id))
         except (ValueError, AttributeError):
             raise HTTPException(
                 status_code=400, detail="parent_span_id must be a valid UUID"
             )
 
     span = Span(
-        trace_id=trace_id,
+        trace_id=payload.trace_id,
         parent_span_id=parent_uuid,
-        name=name,
-        kind=kind,
-        agent_id=payload.get("agent_id"),
-        prompt_name=payload.get("prompt_name"),
-        status=payload.get("status", "ok"),
-        duration_ms=payload.get("duration_ms"),
-        model=payload.get("model"),
-        prompt_tokens=payload.get("prompt_tokens"),
-        completion_tokens=payload.get("completion_tokens"),
-        input_data=payload.get("input_data"),
-        output_data=payload.get("output_data"),
-        attributes=payload.get("attributes"),
+        name=payload.name,
+        kind=payload.kind,
+        agent_id=payload.agent_id,
+        prompt_name=payload.prompt_name,
+        status=payload.status,
+        duration_ms=payload.duration_ms,
+        error_message=payload.error_message,
+        model=payload.model,
+        prompt_tokens=payload.prompt_tokens,
+        completion_tokens=payload.completion_tokens,
+        input_data=payload.input_data,
+        output_data=payload.output_data,
+        attributes=payload.attributes,
+        tool_name=payload.tool_name,
+        success=payload.success,
+        tool_args=payload.tool_args,
+        tool_result=payload.tool_result,
         project_id=project_id,
     )
 
