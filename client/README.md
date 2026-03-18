@@ -2,19 +2,146 @@
 
 Python client SDK for [PromptLedger](https://github.com/promptledger/PromptLedger) — a prompt registry, execution tracking, and lineage service for GenAI applications.
 
-> **Note:** This package is currently a placeholder. The full SDK (`0.1.0`) will be released alongside PromptLedger Epic 1.
-
-## Planned features
-
-- `AsyncPromptLedgerClient` — async httpx wrapper for all PromptLedger API endpoints
-- `PromptLedgerClient` — sync wrapper with identical interface
-- `log_span()` — log LLM calls from code-based (Mode 2) workflows
-- `register_code_prompts()` — register and version-track prompts defined in code
-- `start_trace()` / `current_trace_id()` — contextvars helpers for multi-step trace correlation
-- Structured exceptions: `AuthError`, `NotFoundError`, `PromptLedgerError`
-
-## Installation (coming soon)
+## Installation
 
 ```bash
 pip install promptledger-client
 ```
+
+## Quick Start
+
+```python
+import os
+from promptledger_client import AsyncPromptLedgerClient, RegistrationPayload
+
+async def main():
+    async with AsyncPromptLedgerClient(
+        base_url=os.environ["PROMPTLEDGER_API_URL"],
+        api_key=os.environ["PROMPTLEDGER_API_KEY"],
+    ) as client:
+
+        # 1. Register prompts at startup (idempotent)
+        await client.register_code_prompts([
+            RegistrationPayload(
+                name="my_agent.turn",
+                template_source="You are a research agent. {{instructions}}",
+            )
+        ])
+
+        # 2. Execute — PL calls the LLM, logs the span, returns result + span_id
+        state = {"trace_id": "my-run-001", "phase_span_id": "phase-abc"}
+
+        result = await client.execute(
+            prompt_name="my_agent.turn",
+            messages=[
+                {"role": "system", "content": "You are a research agent."},
+                {"role": "user",   "content": "Summarise the key findings."},
+            ],
+            mode="mode2",
+            state=state,       # reads trace_id/phase_span_id, writes last_span_id
+            agent_id="researcher",
+            max_tokens=512,
+        )
+
+        print(result.response_text)
+        print(f"span_id: {result.span_id}")            # use as parent for child spans
+        print(f"cost: ${result.telemetry.total_cost}")
+        print(f"last_span_id: {state['last_span_id']}") # written back by execute()
+```
+
+## Core Methods
+
+| Method | When to use |
+|---|---|
+| `execute()` | All LLM calls — Mode 1 and Mode 2. PL makes the LLM call, creates the span automatically, returns `response_text` + `span_id`. |
+| `register_code_prompts()` | At service startup to register or version-track prompt templates defined in code. Idempotent. |
+| `log_span()` | Low-level span logging for non-LLM steps: workflow phase spans, guardrail child spans, tool call spans. |
+| `get_trace_summary()` | After a workflow run — retrieve aggregated token usage and cost for a full trace. |
+| `health()` | Health check — returns `True` if the PromptLedger API is reachable. |
+
+## `execute()` Reference
+
+```python
+result = await client.execute(
+    prompt_name="my_agent.turn",   # required — links execution to registered prompt
+    messages=[...],                # Mode 2: caller-constructed messages array
+    variables={...},               # Mode 1: template variables (PL renders template)
+    mode="mode2",                  # "mode1" or "mode2" (default: "mode2")
+    state=state,                   # optional — reads/writes span IDs
+    agent_id="researcher",         # optional — tagged on the auto-created span
+    max_tokens=512,
+    temperature=0.7,
+)
+
+# result.response_text: str
+# result.span_id: str | None      — ID of the span created during execution
+# result.execution_id: str
+# result.telemetry.prompt_tokens: int
+# result.telemetry.completion_tokens: int
+# result.telemetry.latency_ms: int
+# result.telemetry.total_cost: float | None
+```
+
+### `state` dict behaviour
+
+If `state` is provided:
+- `state["trace_id"]` → `span.trace_id`
+- `state.get("phase_span_id")` → `span.parent_span_id`
+- After execution: `state["last_span_id"] = result.span_id`
+
+This eliminates manual span ID threading across Lobster workflow steps or any
+stateless multi-step pipeline.
+
+## Span Hierarchy Pattern
+
+```python
+from promptledger_client.models import SpanPayload
+
+# Phase-level parent spans — use log_span() directly (no LLM call)
+state["phase_span_id"] = await client.log_span(SpanPayload(
+    trace_id=state["trace_id"],
+    name="open_discussion",
+    kind="workflow.phase",
+    status="ok",
+))
+
+# Agent LLM turns — use execute() (PL makes LLM call, auto-creates span)
+result = await client.execute(
+    prompt_name="paper_agent_discussion",
+    messages=[...],
+    mode="mode2",
+    state=state,   # parented under phase_span_id automatically
+    agent_id="paper_1",
+)
+
+# Guardrail child spans — use log_span() with parent = the turn span
+await client.log_span(SpanPayload(
+    trace_id=state["trace_id"],
+    parent_span_id=state["last_span_id"],  # child of the turn, not the phase
+    agent_id="guardrail",
+    name="guardrail_check",
+    kind="guardrail.check",
+    status="ok",
+    attributes={"violations_found": 0},
+))
+```
+
+## Context Helpers (single-process async only)
+
+For simple in-process async workflows (not Lobster/Celery/serverless):
+
+```python
+from promptledger_client.context import start_trace, current_trace_id, set_parent_span_id
+```
+
+> **Warning:** Do not use contextvars across Lobster workflow steps, Celery tasks,
+> or Railway sleeping cycles — they do not survive process boundaries.
+> Use the `state` dict pattern with `execute()` instead.
+
+## Exceptions
+
+| Exception | When raised |
+|---|---|
+| `AuthError` | 401 — invalid or missing API key |
+| `NotFoundError` | 404 — prompt or trace not found |
+| `PromptLedgerError` | 400, 5xx — validation errors or server errors |

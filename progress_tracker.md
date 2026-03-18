@@ -36,7 +36,23 @@ Newest entries first. Updated after every commit.
 
 ### Next Steps
 - [ ] Run integration tests against Docker when available to confirm GREEN
-- [ ] Update requirements/FR-003-unified-execution-client.md status → Implemented
+- [x] Update requirements/FR-003-unified-execution-client.md status → Implemented
+- [x] Documentation stories 3.5 + 3.6 complete (see entry below)
+
+---
+
+## [2026-03-18] - FR-003 Stories 3.5 + 3.6: Documentation updates
+
+### Summary
+- **`INTEGRATION_GUIDE.md`** — Section 4 trade-off table updated (observability now "Automatic via execute()"); Section 5 Mode 2 walkthrough replaced 20-line boilerplate with `execute()` pattern (old pattern preserved in `<details>` legacy block); Section 7 graceful degradation updated; Section 9 stateless span-passing expanded with `execute()` + `state` dict pattern and `log_span()` vs `execute()` decision table; Section 11 API reference updated with Mode 2 `messages` request body and `span_id` response field
+- **`README.md`** — Features list adds unified `execute()` method bullet; architecture diagram updated to show Mode 2 routing through PL (not direct provider call); `POST /v1/spans` demoted to low-level path
+- **`client/README.md`** — Full rewrite: leads with `execute()` quick start, core method comparison table, `execute()` parameter reference, `state` dict behaviour, span hierarchy pattern, contextvars warning
+- **`requirements/FR-003-unified-execution-client.md`** — Status updated to Implemented
+
+### Decisions
+- Old 20-line boilerplate kept in a `<details>` block so existing integrations aren't broken by the doc change
+- `log_span()` vs `execute()` decision table added to stateless workflow section — clarifies which spans use each method
+- client/README.md fully rewritten from placeholder to production-quality reference
 
 ## [2026-03-17] - E2E test suite against live Railway deployment
 

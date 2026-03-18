@@ -15,12 +15,12 @@ slowing down development.
 ## Features
 
 - **Dual-Mode Prompt Management**: Full database management OR code-based tracking with automatic versioning
+- **Unified `execute()` Method**: Single SDK call for Mode 1 and Mode 2 — PromptLedger makes the LLM call, creates the span, and returns `response_text` + `span_id`. No provider SDK in your application code.
 - **Workflow Execution Tracking**: OpenTelemetry-style spans for tracing multi-step agentic workflows
 - **Prompt Registry**: Content-based versioning with SHA-256 deduplication
 - **Multi-Provider Execution**: OpenAI and Anthropic adapters with extensible factory pattern
-- **Span Ingestion API**: `POST /v1/spans` for Mode 2 clients to report LLM calls directly
 - **Multi-Provider Cost Model**: YAML-backed pricing table with fnmatch glob matching; `total_cost` in analytics and trace summaries
-- **Python SDK**: `pip install promptledger-client` — `AsyncPromptLedgerClient`, contextvars trace helpers, Pydantic models
+- **Python SDK**: `pip install promptledger-client` — `AsyncPromptLedgerClient`, `execute()`, contextvars trace helpers, Pydantic models
 - **Dry-Run Registration**: `POST /v1/prompts/register-code` with `dry_run: true` for CI/CD validation
 - **Async-first Design**: Redis + Celery for production workloads
 - **Full Lineage**: Complete execution tracking and parent-child relationships in Postgres
@@ -31,13 +31,18 @@ slowing down development.
 ```
 Client (Agentic Workflow)
   │
-  ├─► Mode 1: POST /v1/executions:run ──► Provider Adapter (OpenAI / Anthropic)
-  │                                              │
-  │                                              ▼
-  │                                       Results + Telemetry → Postgres
+  ├─► Mode 1: POST /v1/executions/run ─► Provider Adapter (OpenAI / Anthropic)
+  │           (prompt_name + variables)         │
+  │                                             ▼
+  │                                      Results + Span + Telemetry → Postgres
   │
-  └─► Mode 2: POST /v1/spans ──────────► Postgres (spans, traces)
-              (client calls LLM directly)
+  ├─► Mode 2: POST /v1/executions/run ─► Provider Adapter (OpenAI / Anthropic)
+  │           (prompt_name + messages)          │
+  │           client constructs messages,        ▼
+  │           PL makes the LLM call      Results + Span + Telemetry → Postgres
+  │
+  └─► Low-level: POST /v1/spans ───────► Postgres (spans, traces)
+                 (phase spans, guardrail child spans, tool calls)
 
 Prompt Registry & Execution API (FastAPI)
   ├── Registry ops   → Postgres (prompts, versions)

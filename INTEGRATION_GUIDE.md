@@ -168,10 +168,12 @@ Choose **Mode 1** when:
 
 | | Mode 1 | Mode 2 |
 |---|---|---|
+| Prompt template lives in | PromptLedger database | Your application code / Git |
+| LLM calls made by | PromptLedger execution engine | PromptLedger (via `execute()`) |
 | Provider flexibility | Adapters only | Any provider you can call |
 | Prompt editability | Live, no deploy | Code deploy required |
-| Unit testability | Network required | Trivial (`tracker=None`) |
-| Observability setup | Automatic | ~20 lines per call site |
+| Unit testability | Network required | Mock `execute()` — trivial |
+| Observability setup | Automatic | Automatic via `execute()` |
 | CI validation | N/A | `dry_run: true` |
 | Async fan-out control | Celery-managed | Your application's event loop |
 
@@ -179,13 +181,15 @@ Choose **Mode 1** when:
 
 ## End-to-End Mode 2 Walkthrough
 
-This section covers a complete Mode 2 integration using Anthropic as the LLM provider.
-The same pattern works for any provider you call directly.
+This section covers a complete Mode 2 integration using the `execute()` SDK method.
+With `execute()`, your call site is 3–5 lines: register prompts at startup, call
+`execute()` with your constructed messages, and PromptLedger handles the LLM call,
+span creation, and cost tracking automatically.
 
 ### 1. Install the SDK
 
 ```bash
-pip install promptledger-client anthropic
+pip install promptledger-client
 ```
 
 ### 2. Configure environment
@@ -193,7 +197,7 @@ pip install promptledger-client anthropic
 ```env
 PROMPTLEDGER_API_URL=https://your-instance.up.railway.app
 PROMPTLEDGER_API_KEY=your-api-key-here
-ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...   # held by PromptLedger, not your application
 ```
 
 ### 3. Define your prompts in code
@@ -270,76 +274,62 @@ async def lifespan():
     # ... rest of startup
 ```
 
-### 5. Wrap a direct Anthropic call with span logging
+### 5. Make LLM calls via `execute()`
+
+With `execute()`, PromptLedger makes the LLM call on your behalf and automatically
+creates a span. No provider SDK import, no manual timing, no `SpanPayload` construction.
 
 ```python
 # my_app/agents/researcher.py
-import os
-import time
-from datetime import datetime, timezone
-
-import anthropic
 from promptledger_client import AsyncPromptLedgerClient
-from promptledger_client.models import SpanPayload
-from promptledger_client.context import current_trace_id, current_parent_span_id
-
-from my_app.prompts import PAPER_EXTRACTION
+from my_app.prompts import PAPER_EXTRACTION_SYSTEM
 
 
 async def extract_paper(
     title: str,
     abstract: str,
     tracker: AsyncPromptLedgerClient | None = None,
+    state: dict | None = None,
 ) -> str:
-    """Extract key contributions from a paper and log the LLM call."""
+    """Extract key contributions from a paper."""
 
-    # Render the template
-    rendered = PAPER_EXTRACTION.replace("{{title}}", title).replace(
-        "{{abstract}}", abstract
-    )
+    if tracker is not None:
+        result = await tracker.execute(
+            prompt_name="paper_agent.extraction",
+            messages=[
+                {"role": "system", "content": PAPER_EXTRACTION_SYSTEM},
+                {"role": "user",   "content": f"Title: {title}\n\nAbstract: {abstract}"},
+            ],
+            mode="mode2",
+            state=state,           # reads trace_id/phase_span_id, writes last_span_id
+            agent_id="researcher",
+            max_tokens=512,
+        )
+        return result.response_text
 
-    # Call Anthropic directly
+    # Fallback: tracker is None (tests, local dev without PL)
+    # Call the provider directly — only path that needs the provider SDK
+    import anthropic
     client = anthropic.AsyncAnthropic()
-    start = time.time()
-    start_time = datetime.now(timezone.utc)
-
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=512,
-        messages=[{"role": "user", "content": rendered}],
+        messages=[
+            {"role": "system", "content": PAPER_EXTRACTION_SYSTEM},
+            {"role": "user",   "content": f"Title: {title}\n\nAbstract: {abstract}"},
+        ],
     )
-
-    duration_ms = int((time.time() - start) * 1000)
-    result_text = response.content[0].text
-
-    # Log the span to PromptLedger (no-op if tracker is None)
-    if tracker is not None:
-        span_id = await tracker.log_span(SpanPayload(
-            trace_id=current_trace_id(),
-            parent_span_id=current_parent_span_id(),
-            name="paper_agent.extraction",
-            kind="llm.generation",
-            start_time=start_time.isoformat(),
-            duration_ms=duration_ms,
-            status="ok",
-            model="claude-haiku-4-5-20251001",
-            prompt_tokens=response.usage.input_tokens,
-            completion_tokens=response.usage.output_tokens,
-            prompt_name="paper_agent.extraction",
-            input_data={"title": title, "abstract": abstract[:200]},
-        ))
-
-    return result_text
+    return response.content[0].text
 ```
 
-### 6. Multi-step workflows with contextvars trace propagation
+### 6. Multi-step workflows with `state` dict trace propagation
+
+For sequential pipelines, pass a `state` dict through each step. `execute()` reads
+`trace_id` and `phase_span_id` from state and writes `last_span_id` back after each call.
 
 ```python
 # my_app/workflows/research_pipeline.py
-import asyncio
-import os
 from promptledger_client import AsyncPromptLedgerClient
-from promptledger_client.context import start_trace, set_parent_span_id
 from promptledger_client.models import SpanPayload
 from my_app.agents.researcher import extract_paper
 from my_app.agents.synthesizer import synthesize_newsletter
@@ -351,77 +341,125 @@ async def run_research_pipeline(
 ) -> str:
     """Run the full research pipeline for a batch of papers."""
 
-    # Start a new trace for this pipeline run
-    trace_id = start_trace()  # stored in a contextvar; visible to all coroutines below
+    state: dict = {}
 
-    # Log a root span for the pipeline
+    # Log a root phase span — sets state["phase_span_id"] for child turns
     if tracker is not None:
-        root_span_id = await tracker.log_span(SpanPayload(
-            trace_id=trace_id,
+        import uuid
+        state["trace_id"] = f"research-{uuid.uuid4().hex[:8]}"
+        state["phase_span_id"] = await tracker.log_span(SpanPayload(
+            trace_id=state["trace_id"],
             name="research_pipeline",
             kind="workflow.phase",
-            start_time=_now(),
             status="ok",
         ))
-        set_parent_span_id(root_span_id)  # child spans will nest under this
 
-    # Extract contributions from all papers (sequential for simplicity)
+    # Each execute() call automatically nests under phase_span_id
     extractions = []
     for paper in papers:
         text = await extract_paper(
             title=paper["title"],
             abstract=paper["abstract"],
             tracker=tracker,
+            state=state,
         )
         extractions.append(text)
 
-    # Synthesize into newsletter prose
     newsletter = await synthesize_newsletter(
         summaries="\n\n".join(extractions),
         tracker=tracker,
+        state=state,
     )
 
     return newsletter
-
-
-def _now() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
 ```
 
-### 7. Test isolation with `tracker=None`
+### 7. Test isolation
 
-The injection pattern makes testing trivial — pass `tracker=None` and no network calls
-are made to PromptLedger:
+Mock `execute()` directly — no provider SDK needed in tests:
 
 ```python
 # tests/test_researcher.py
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
+from promptledger_client import ExecutionResult, ExecutionTelemetry
 from my_app.agents.researcher import extract_paper
 
 
-async def test_extract_paper_no_tracker(monkeypatch):
-    """extract_paper works correctly with tracker=None (no PromptLedger calls)."""
+async def test_extract_paper_with_tracker(monkeypatch):
+    mock_tracker = AsyncMock()
+    mock_tracker.execute.return_value = ExecutionResult(
+        execution_id="exec-123",
+        status="succeeded",
+        response_text="Key contribution: ...",
+        span_id="span-abc",
+        telemetry=ExecutionTelemetry(
+            prompt_tokens=200, completion_tokens=80, latency_ms=400,
+            model_name="claude-haiku-4-5-20251001", provider="anthropic", total_cost=0.001,
+        ),
+    )
 
+    result = await extract_paper(
+        title="Test Paper", abstract="This paper presents...",
+        tracker=mock_tracker, state={"trace_id": "t-1"},
+    )
+
+    assert result == "Key contribution: ..."
+    mock_tracker.execute.assert_awaited_once()
+
+
+async def test_extract_paper_no_tracker(monkeypatch):
+    """tracker=None falls back to direct provider call."""
+    from unittest.mock import MagicMock
     mock_response = MagicMock()
     mock_response.content = [MagicMock(text="Key contribution: ...")]
-    mock_response.usage.input_tokens = 200
-    mock_response.usage.output_tokens = 80
-
     mock_client = AsyncMock()
     mock_client.messages.create.return_value = mock_response
     monkeypatch.setattr("anthropic.AsyncAnthropic", lambda: mock_client)
 
-    result = await extract_paper(
-        title="Test Paper",
-        abstract="This paper presents...",
-        tracker=None,  # no PromptLedger calls
-    )
-
+    result = await extract_paper(title="Test Paper", abstract="...", tracker=None)
     assert "Key contribution" in result
-    mock_client.messages.create.assert_awaited_once()
 ```
+
+<details>
+<summary>Legacy pattern (pre-FR-003) — use <code>execute()</code> instead</summary>
+
+Before FR-003, Mode 2 required calling the provider SDK directly and manually logging
+a span. This pattern still works but is no longer recommended:
+
+```python
+import anthropic, time
+from datetime import datetime, timezone
+from promptledger_client.models import SpanPayload
+
+client = anthropic.AsyncAnthropic()
+start = time.time()
+start_time = datetime.now(timezone.utc)
+
+response = await client.messages.create(
+    model="claude-haiku-4-5-20251001",
+    max_tokens=512,
+    messages=[{"role": "user", "content": rendered}],
+)
+
+duration_ms = int((time.time() - start) * 1000)
+
+if tracker is not None:
+    await tracker.log_span(SpanPayload(
+        trace_id=state["trace_id"],
+        parent_span_id=state.get("phase_span_id"),
+        name="paper_agent.extraction",
+        kind="llm.generation",
+        duration_ms=duration_ms,
+        status="ok",
+        model="claude-haiku-4-5-20251001",
+        prompt_tokens=response.usage.input_tokens,
+        completion_tokens=response.usage.output_tokens,
+        prompt_name="paper_agent.extraction",
+    ))
+
+result_text = response.content[0].text
+```
+</details>
 
 ---
 
@@ -577,8 +615,8 @@ Usage at every call site:
 ```python
 from my_app.observability import tracker
 
-result = await extract_paper(title=..., abstract=..., tracker=tracker)
-# tracker is None → no PromptLedger calls, no import, no error
+result = await extract_paper(title=..., abstract=..., tracker=tracker, state=state)
+# tracker is None → execute() not called, falls back to direct provider call
 ```
 
 **Startup registration with graceful degradation:**
@@ -695,20 +733,21 @@ Serverless environments and workflow engines — Railway sleeping, Celery tasks,
 workflow frameworks — execute steps in separate invocations and cannot rely on in-memory
 context to carry `trace_id` or `parent_span_id` across steps.
 
-**The canonical pattern: pass span IDs explicitly through the workflow state object.**
+**The canonical pattern: pass a `state` dict through every workflow step. `execute()`
+reads `trace_id` and `phase_span_id` from it and writes `last_span_id` back automatically.**
 
 ```python
-# ✅ Workflow engine pattern — span IDs in state, not contextvars
+# ✅ Workflow engine pattern — execute() with state dict
 
 async def start_discussion_phase(state: dict, tracker) -> dict:
-    """Phase start: log a phase span and store its ID in state."""
+    """Phase start: log a phase-level parent span and store its ID in state."""
     if tracker:
-        state["trace_id"] = state.get("trace_id") or str(uuid.uuid4())
+        import uuid
+        state["trace_id"] = state.get("trace_id") or f"forum-{uuid.uuid4().hex[:8]}"
         state["phase_span_id"] = await tracker.log_span(SpanPayload(
             trace_id=state["trace_id"],
             name="open_discussion",
             kind="workflow.phase",
-            start_time=_now(),
             status="ok",
         ))
     return state
@@ -717,41 +756,67 @@ async def start_discussion_phase(state: dict, tracker) -> dict:
 async def run_agent_turn(
     state: dict,
     agent_id: str,
-    message: str,
+    system_prompt: str,
+    transcript: str,
     tracker,
 ) -> dict:
-    """Single agent turn: log a turn span nested under the phase span."""
-
-    # Call the LLM
-    response = await call_llm(agent_id=agent_id, message=message)
+    """Single agent turn: execute() automatically nests under phase_span_id."""
 
     if tracker:
-        turn_span_id = await tracker.log_span(SpanPayload(
-            trace_id=state["trace_id"],
-            parent_span_id=state["phase_span_id"],   # from state, not contextvars
-            agent_id=agent_id,
-            name="paper_agent_discussion",
-            kind="llm.generation",
-            start_time=response.start_time,
-            duration_ms=response.duration_ms,
-            status="ok",
-            model=response.model,
-            prompt_tokens=response.input_tokens,
-            completion_tokens=response.output_tokens,
+        # execute() reads state["trace_id"] and state["phase_span_id"],
+        # calls the LLM, creates the span, and writes state["last_span_id"]
+        result = await tracker.execute(
             prompt_name="paper_agent_discussion",
-        ))
-        state["last_turn_span_id"] = turn_span_id
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": transcript},
+            ],
+            mode="mode2",
+            state=state,        # span automatically parented under phase_span_id
+            agent_id=agent_id,
+            max_tokens=600,
+        )
+        response_text = result.response_text
+        # state["last_span_id"] is now set — use as parent for guardrail child spans
+        turn_span_id = state["last_span_id"]
+    else:
+        response_text = await call_llm_directly(system_prompt, transcript)
+        turn_span_id = None
 
-    state["messages"].append({"agent": agent_id, "content": response.text})
+    state["messages"].append({"agent": agent_id, "content": response_text})
+    state["last_turn_span_id"] = turn_span_id
     return state
+
+
+async def run_guardrail_check(state: dict, turn_span_id: str, alerts: list, tracker) -> None:
+    """Guardrail spans parent the turn they check — use log_span() directly."""
+    if tracker and turn_span_id:
+        await tracker.log_span(SpanPayload(
+            trace_id=state["trace_id"],
+            parent_span_id=turn_span_id,   # child of the TURN span, not the phase
+            agent_id="guardrail",
+            name="guardrail_check",
+            kind="guardrail.check",
+            status="ok",
+            attributes={"violations_found": len(alerts)},
+        ))
 ```
+
+**Which spans use `execute()` vs `log_span()` directly:**
+
+| Span type | Method | Reason |
+|---|---|---|
+| Agent LLM turns | `execute()` | PL makes the LLM call; span created automatically |
+| Phase-level parent spans | `log_span()` | No LLM call — workflow structure only |
+| Guardrail child spans | `log_span()` | Must parent the turn span, not the phase span |
+| Tool calls, non-LLM steps | `log_span()` | No LLM call involved |
 
 **Rule of thumb:**
 
-- Use `contextvars` for in-process async fan-out (parallel tool calls within a single
-  agent turn in a long-running server process).
-- Use explicit state passing for anything that crosses a process boundary, a sleep/wake
-  cycle, or a workflow step transition.
+- Use `execute()` for any step where PromptLedger should make the LLM call.
+- Use `log_span()` for structural spans (phases, workflow steps) and non-LLM child spans (guardrails, tool calls).
+- Use `contextvars` for in-process async fan-out only (parallel tool calls within a single agent turn in a long-running server process).
+- Use explicit `state` dict passing for anything that crosses a process boundary, a sleep/wake cycle, or a workflow step transition.
 
 ---
 
@@ -887,14 +952,46 @@ X-API-Key: <your-api-key>
 | `GET` | `/v1/analytics/prompts` | Prompt execution analytics (both modes) |
 | `GET` | `/v1/analytics/agents` | Cross-trace agent analytics |
 
-### `POST /v1/executions:run` — synchronous execution response
+### `POST /v1/executions:run` — synchronous execution
 
+**Mode 1 request (PL renders template):**
+```json
+{
+  "prompt_name": "doc_summarizer",
+  "variables": { "text": "..." },
+  "model": { "provider": "anthropic", "model_name": "claude-haiku-4-5-20251001" },
+  "params": { "max_tokens": 512 },
+  "span": { "trace_id": "my-trace-id", "parent_span_id": "phase-span-id" }
+}
+```
+
+**Mode 2 request (caller constructs messages):**
+```json
+{
+  "prompt_name": "paper_agent_discussion",
+  "messages": [
+    { "role": "system", "content": "You are a research agent..." },
+    { "role": "user",   "content": "Full transcript + framing question..." }
+  ],
+  "model": { "provider": "anthropic", "model_name": "claude-sonnet-4-6" },
+  "params": { "max_tokens": 600, "temperature": 0.7 },
+  "span": {
+    "trace_id": "srf-2026-w10",
+    "parent_span_id": "phase-open-discussion-span-id",
+    "agent_id": "paper_1",
+    "kind": "llm.generation"
+  }
+}
+```
+
+**Response (both modes):**
 ```json
 {
   "execution_id": "<uuid>",
   "status": "succeeded",
   "mode": "sync",
   "response_text": "...",
+  "span_id": "<uuid>",
   "telemetry": {
     "prompt_tokens": 312,
     "response_tokens": 87,
@@ -905,6 +1002,10 @@ X-API-Key: <your-api-key>
   }
 }
 ```
+
+`span_id` is the ID of the span automatically created during execution — use it as
+`parent_span_id` for any child spans (e.g. guardrail checks). `span_id` is `null` if
+no `span` block was included in the request.
 
 `total_cost` is `null` (not `0.00`) when the model name is not in the pricing table.
 
