@@ -68,9 +68,7 @@ async def list_project_keys(
     db: AsyncSession = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     """List key metadata for a project. Never returns plaintext or hashes."""
-    result = await db.execute(
-        select(Project).where(Project.project_id == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.project_id == project_id))
     project = result.scalar_one_or_none()
     if project is None:
         raise HTTPException(
@@ -103,9 +101,7 @@ async def create_project(
 
     The plaintext key is returned exactly once and never stored.
     """
-    existing = await db.execute(
-        select(Project).where(Project.name == body.name)
-    )
+    existing = await db.execute(select(Project).where(Project.name == body.name))
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -135,9 +131,7 @@ async def create_project(
     }
 
 
-@router.post(
-    "/projects/{project_id}/keys", status_code=status.HTTP_201_CREATED
-)
+@router.post("/projects/{project_id}/keys", status_code=status.HTTP_201_CREATED)
 async def issue_additional_key(
     project_id: UUID,
     body: IssueKeyRequest,
@@ -148,9 +142,7 @@ async def issue_additional_key(
     The plaintext key is returned exactly once and never stored.
     Old keys remain valid until explicitly revoked.
     """
-    result = await db.execute(
-        select(Project).where(Project.project_id == project_id)
-    )
+    result = await db.execute(select(Project).where(Project.project_id == project_id))
     project = result.scalar_one_or_none()
     if project is None:
         raise HTTPException(
