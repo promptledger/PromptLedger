@@ -4,6 +4,30 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-18] - Epic 2 Story 2.3: scope spans and executions to project
+
+### Summary
+- **Models:** `Span` and `Execution` — added nullable `project_id` FK to `projects` table with index on each
+- **spans.py:** `ingest_span` stamps `project_id`; `get_trace` and `get_trace_summary` filter by `project_id` (cross-project trace IDs return 404)
+- **analytics.py:** `get_prompts_analytics` and `get_agent_analytics` both scoped by `project_id`; `_cost_by_mode` helper updated to filter `Execution.project_id`
+- **executions.py:** `run_execution_sync`, `submit_execution_async`, `get_execution`, `list_executions` all pass/scope `project_id`
+- **ExecutionService:** `__init__` accepts optional `project_id`; stamped on new `Execution` records and auto-spans via `_create_span_for_execution`
+- **code_prompts.py:** `execute_code_prompt` passes `project_id` to `ExecutionService`
+- **Migration:** `f3a4b5c6d7e8` — add nullable `project_id` + backfill from default project + index, for both spans and executions; `down_revision = e2f3a4b5c6d7`
+- **Tests:** 4 unit tests (`test_span_execution_scoping.py`) + 5 integration tests (`test_span_scoping.py`); all skip without Docker (expected)
+
+### Decisions
+- Kept `project_id` nullable post-migration (unlike prompts which went NOT NULL) — allows pre-namespacing rows to coexist; all new rows stamped via authenticated endpoints
+- Analytics filtered via `Execution.project_id` rather than joining through `Prompt.project_id` — executions are the primary data source; joining through prompt would exclude executions from deleted prompts
+- Auto-spans inherit `project_id` from `ExecutionService.project_id` — consistent with the execution they're linked to
+
+### Issues & Resolution
+- None — clean implementation; 2 pre-existing test failures unrelated to this story
+
+### Next Steps
+- [ ] Story 2.4: Admin API (running in parallel in user's other terminal)
+- [ ] Story 2.5: Documentation update (after 2.4 is stable)
+
 ## [2026-03-18] - FR-003: messages input, auto-span creation, SDK execute()
 
 ### Summary
