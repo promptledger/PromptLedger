@@ -1,11 +1,14 @@
-"""Span ingestion and trace retrieval endpoints — Story 1.7."""
+"""Span ingestion and trace retrieval endpoints — Story 1.7, Epic 5."""
 
+import base64
+import json
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from prompt_ledger.api.dependencies import verify_api_key
@@ -144,6 +147,31 @@ def _build_trace_summary(
 
 
 # ---------------------------------------------------------------------------
+# Cursor helpers for GET /v1/traces pagination
+# ---------------------------------------------------------------------------
+
+
+def _encode_cursor(trace_start: datetime, trace_id: str) -> str:
+    """Encode (trace_start, trace_id) into a URL-safe base64 cursor string."""
+    data = {"ts": trace_start.isoformat(), "tid": trace_id}
+    return base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
+
+
+def _decode_cursor(cursor_str: str):
+    """Decode a cursor string into (trace_start, trace_id).
+
+    Raises HTTP 422 if the cursor is malformed.
+    """
+    try:
+        data = json.loads(base64.urlsafe_b64decode(cursor_str.encode()))
+        ts = datetime.fromisoformat(data["ts"])
+        tid: str = data["tid"]
+        return ts, tid
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid cursor value")
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -201,6 +229,123 @@ async def ingest_span(
     await db.refresh(span)
 
     return {"span_id": str(span.span_id)}
+
+
+@traces_router.get("", response_model=Dict[str, Any])
+async def list_traces(
+    agent_id: Optional[str] = None,
+    status: Optional[Literal["ok", "error"]] = None,
+    prompt_name: Optional[str] = None,
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to: Optional[datetime] = None,
+    page_size: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    project_id: UUID = Depends(verify_api_key),
+) -> Dict[str, Any]:
+    """List traces with optional filtering and cursor-based pagination.
+
+    Returns trace-level summaries (aggregate of all spans per trace_id).
+    Supports filtering by agent_id, status, prompt_name, and time range.
+    Results are ordered by trace start time ascending.
+    """
+    # --- span-level conditions (applied before grouping) ---
+    span_conds = [Span.project_id == project_id]
+
+    if agent_id:
+        agent_tids = (
+            select(Span.trace_id)
+            .where(Span.project_id == project_id, Span.agent_id == agent_id)
+            .distinct()
+            .scalar_subquery()
+        )
+        span_conds.append(Span.trace_id.in_(agent_tids))
+
+    if prompt_name:
+        prompt_tids = (
+            select(Span.trace_id)
+            .where(Span.project_id == project_id, Span.prompt_name == prompt_name)
+            .distinct()
+            .scalar_subquery()
+        )
+        span_conds.append(Span.trace_id.in_(prompt_tids))
+
+    # --- aggregation subquery ---
+    has_error_expr = func.max(case((Span.status == "error", 1), else_=0))
+    trace_start_expr = func.min(Span.start_time)
+
+    agg_subq = (
+        select(
+            Span.trace_id,
+            trace_start_expr.label("trace_start"),
+            func.count(Span.span_id).label("span_count"),
+            func.coalesce(func.sum(Span.prompt_tokens), 0).label("total_prompt_tokens"),
+            func.coalesce(func.sum(Span.completion_tokens), 0).label(
+                "total_completion_tokens"
+            ),
+            has_error_expr.label("has_error"),
+        )
+        .where(and_(*span_conds))
+        .group_by(Span.trace_id)
+        .subquery()
+    )
+
+    # --- outer query with post-aggregation filters ---
+    outer_q = select(agg_subq)
+
+    if status == "error":
+        outer_q = outer_q.where(agg_subq.c.has_error == 1)
+    elif status == "ok":
+        outer_q = outer_q.where(agg_subq.c.has_error == 0)
+
+    if from_:
+        outer_q = outer_q.where(agg_subq.c.trace_start >= from_)
+    if to:
+        outer_q = outer_q.where(agg_subq.c.trace_start <= to)
+
+    # --- cursor-based pagination ---
+    if cursor:
+        cursor_ts, cursor_tid = _decode_cursor(cursor)
+        outer_q = outer_q.where(
+            or_(
+                agg_subq.c.trace_start > cursor_ts,
+                and_(
+                    agg_subq.c.trace_start == cursor_ts,
+                    agg_subq.c.trace_id > cursor_tid,
+                ),
+            )
+        )
+
+    # Fetch one extra row to detect whether there is a next page
+    outer_q = outer_q.order_by(agg_subq.c.trace_start, agg_subq.c.trace_id).limit(
+        page_size + 1
+    )
+
+    result = await db.execute(outer_q)
+    rows = result.fetchall()
+
+    has_next = len(rows) > page_size
+    rows = rows[:page_size]
+
+    next_cursor: Optional[str] = None
+    if has_next and rows:
+        last = rows[-1]
+        next_cursor = _encode_cursor(last.trace_start, last.trace_id)
+
+    traces = [
+        {
+            "trace_id": row.trace_id,
+            "status": "error" if row.has_error else "ok",
+            "span_count": row.span_count,
+            "total_prompt_tokens": row.total_prompt_tokens,
+            "total_completion_tokens": row.total_completion_tokens,
+            "total_cost": None,
+            "start_time": row.trace_start.isoformat() if row.trace_start else None,
+        }
+        for row in rows
+    ]
+
+    return {"traces": traces, "next_cursor": next_cursor}
 
 
 @traces_router.get("/{trace_id}", response_model=Dict[str, Any])
