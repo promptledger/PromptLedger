@@ -4,6 +4,53 @@ Newest entries first. Updated after every commit.
 
 ---
 
+## [2026-03-22] - Epic 5 (Stories 5.1–5.3): Trace Search & Filtering
+
+### Summary
+- **Story 5.1 + 5.2** (server endpoint + pagination):
+  - MODIFY `src/prompt_ledger/api/v1/endpoints/spans.py` — added `GET /v1/traces`
+    to `traces_router`; filtering by `agent_id`, `status` (Literal["ok","error"]),
+    `prompt_name`, `from`, `to`; cursor-based pagination (default 20, max 100)
+  - `_encode_cursor()` / `_decode_cursor()` helpers use base64-encoded JSON
+    with `(trace_start, trace_id)` compound key for stable ordering
+  - Aggregation uses a SQLAlchemy subquery pattern: span-level IN subqueries for
+    `agent_id`/`prompt_name`, outer query filters on aggregated `trace_start` and
+    `has_error` (MAX of CASE expression)
+  - NEW `tests/integration/test_traces.py` — 17 tests (10 filtering + 7
+    pagination), all GREEN
+- **Story 5.3** (SDK):
+  - NEW `client/promptledger_client/trace_models.py` — `TraceListItem` and
+    `TraceSummaryPage` Pydantic models
+  - MODIFY `client/promptledger_client/async_client.py` — `list_traces()` with
+    all filter + pagination params; returns `TraceSummaryPage`
+  - MODIFY `client/promptledger_client/client.py` — sync wrapper
+  - MODIFY `client/promptledger_client/__init__.py` — export new models
+  - MODIFY `client/tests/test_async_client.py` — 6 new `TestListTraces` tests
+    (all GREEN) + `list_traces` added to parity check
+
+### Decisions
+- Subquery aggregation over raw HAVING on GROUP BY: outer query can cleanly apply
+  cursor/filter WHERE conditions on aliased columns rather than repeating aggregate
+  expressions
+- `Literal["ok", "error"]` for status param: FastAPI validates via Pydantic and
+  returns 422 for invalid values with no extra code
+- `total_cost: None` in list response: per-trace cost requires per-span model
+  lookups against pricing table — not feasible in a bulk aggregate query;
+  detailed cost remains available on `GET /v1/traces/{id}/summary`
+- `trace_models.py` as a separate client module: `TraceSummary` in `models.py`
+  is the single-trace detail shape; the new `TraceListItem` is a distinct
+  lighter shape for list results
+
+### Issues & Resolution
+- Standard black/isort re-stage pattern applied for both commits
+
+### Next Steps
+- [ ] Run full suite with Docker (`make docker-up && make test`) to confirm
+  all DB-backed tests GREEN
+- [ ] Push to Railway and confirm `GET /v1/traces` reachable in prod
+
+---
+
 ## [2026-03-18] - Epic 4 (Stories 4.1–4.4): Structured Tool Call Capture
 
 ### Summary
