@@ -297,6 +297,101 @@ class TestLogToolCall:
                 )
 
 
+# ---------------------------------------------------------------------------
+# list_traces()  — Story 5.3
+# ---------------------------------------------------------------------------
+
+
+class TestListTraces:
+    """Acceptance criteria from Story 5.3."""
+
+    def _page_body(self, traces=None, next_cursor=None):
+        return {
+            "traces": traces
+            or [
+                {
+                    "trace_id": "t-1",
+                    "status": "ok",
+                    "span_count": 3,
+                    "total_cost": None,
+                    "total_prompt_tokens": 100,
+                    "total_completion_tokens": 50,
+                    "start_time": "2026-03-18T10:00:00+00:00",
+                },
+            ],
+            "next_cursor": next_cursor,
+        }
+
+    async def test_list_traces_with_agent_id_passes_query_param(self, client):
+        """Scenario: list_traces with agent_id filter passes correct query param."""
+        get_mock = AsyncMock(return_value=_mock_response(200, self._page_body()))
+        with patch.object(client._http, "get", new=get_mock):
+            await client.list_traces(agent_id="paper_1")
+
+        _, kwargs = get_mock.call_args
+        assert kwargs.get("params", {}).get("agent_id") == "paper_1"
+
+    async def test_list_traces_returns_trace_summary_page(self, client):
+        """Scenario: list_traces returns a TraceSummaryPage with a 'traces' list."""
+        from promptledger_client.trace_models import TraceListItem, TraceSummaryPage
+
+        get_mock = AsyncMock(return_value=_mock_response(200, self._page_body()))
+        with patch.object(client._http, "get", new=get_mock):
+            page = await client.list_traces()
+
+        assert isinstance(page, TraceSummaryPage)
+        assert isinstance(page.traces, list)
+        assert len(page.traces) == 1
+        item = page.traces[0]
+        assert isinstance(item, TraceListItem)
+        assert item.trace_id == "t-1"
+        assert item.status == "ok"
+        assert item.span_count == 3
+        assert item.total_cost is None
+
+    async def test_list_traces_passes_cursor_param(self, client):
+        """Scenario: list_traces passes cursor for pagination."""
+        get_mock = AsyncMock(return_value=_mock_response(200, self._page_body()))
+        with patch.object(client._http, "get", new=get_mock):
+            await client.list_traces(cursor="some-cursor-value")
+
+        _, kwargs = get_mock.call_args
+        assert kwargs.get("params", {}).get("cursor") == "some-cursor-value"
+
+    async def test_list_traces_empty_result_returns_empty_list(self, client):
+        """Scenario: list_traces with no results returns empty list, no exception."""
+        get_mock = AsyncMock(
+            return_value=_mock_response(200, {"traces": [], "next_cursor": None})
+        )
+        with patch.object(client._http, "get", new=get_mock):
+            page = await client.list_traces()
+
+        assert page.traces == []
+        assert page.next_cursor is None
+
+    async def test_list_traces_401_raises_auth_error(self, client):
+        """Scenario: 401 response raises AuthError."""
+        with patch.object(
+            client._http,
+            "get",
+            new=AsyncMock(return_value=_mock_response(401)),
+        ):
+            with pytest.raises(AuthError):
+                await client.list_traces()
+
+    async def test_list_traces_next_cursor_exposed_on_page(self, client):
+        """next_cursor on the page should reflect the API response."""
+        get_mock = AsyncMock(
+            return_value=_mock_response(
+                200, self._page_body(next_cursor="abc123cursor")
+            )
+        )
+        with patch.object(client._http, "get", new=get_mock):
+            page = await client.list_traces()
+
+        assert page.next_cursor == "abc123cursor"
+
+
 class TestSyncClientParity:
     def test_sync_client_exposes_same_methods(self):
         from promptledger_client.client import PromptLedgerClient
@@ -308,5 +403,6 @@ class TestSyncClientParity:
             "register_code_prompts",
             "get_trace_summary",
             "log_tool_call",
+            "list_traces",
         ):
             assert callable(getattr(sync, method, None)), f"Missing method: {method}"

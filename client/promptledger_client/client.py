@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from .async_client import AsyncPromptLedgerClient
 from .models import RegisterResult, RegistrationPayload, SpanPayload, TraceSummary
+from .trace_models import TraceSummaryPage
 
 
 class PromptLedgerClient:
@@ -43,6 +44,29 @@ class PromptLedgerClient:
 
     def get_trace_summary(self, trace_id: str) -> TraceSummary:
         return asyncio.run(self._async.get_trace_summary(trace_id))
+
+    def list_traces(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        status: Optional[str] = None,
+        prompt_name: Optional[str] = None,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> TraceSummaryPage:
+        return asyncio.run(
+            self._async.list_traces(
+                agent_id=agent_id,
+                status=status,
+                prompt_name=prompt_name,
+                from_=from_,
+                to=to,
+                page_size=page_size,
+                cursor=cursor,
+            )
+        )
 
     def log_tool_call(
         self,

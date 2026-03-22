@@ -6,6 +6,7 @@ import httpx
 
 from .exceptions import AuthError, NotFoundError, PromptLedgerError
 from .models import RegisterResult, RegistrationPayload, SpanPayload, TraceSummary
+from .trace_models import TraceListItem, TraceSummaryPage
 
 
 class AsyncPromptLedgerClient:
@@ -158,6 +159,59 @@ class AsyncPromptLedgerClient:
             state["last_span_id"] = result.span_id
 
         return result
+
+    async def list_traces(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        status: Optional[str] = None,
+        prompt_name: Optional[str] = None,
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> TraceSummaryPage:
+        """Search and list traces with optional filtering and cursor pagination.
+
+        Args:
+            agent_id:    Filter to traces where at least one span has this agent_id.
+            status:      Filter by trace status — "ok" or "error".
+            prompt_name: Filter to traces containing a span with this prompt_name.
+            from_:       ISO-8601 datetime string; only return traces starting on/after.
+            to:          ISO-8601 datetime string; only return traces starting on/before.
+            page_size:   Number of results per page (1–100, default 20).
+            cursor:      Opaque cursor string from a previous response's next_cursor.
+
+        Returns:
+            TraceSummaryPage with a list of TraceListItem and an optional next_cursor.
+
+        Raises:
+            AuthError:          On 401 responses.
+            PromptLedgerError:  On 400, 422, or 5xx responses.
+        """
+        params: dict = {}
+        if agent_id is not None:
+            params["agent_id"] = agent_id
+        if status is not None:
+            params["status"] = status
+        if prompt_name is not None:
+            params["prompt_name"] = prompt_name
+        if from_ is not None:
+            params["from"] = from_
+        if to is not None:
+            params["to"] = to
+        if page_size is not None:
+            params["page_size"] = page_size
+        if cursor is not None:
+            params["cursor"] = cursor
+
+        response = await self._http.get("/v1/traces", params=params)
+        self._raise_for_status(response)
+        data = response.json()
+        return TraceSummaryPage(
+            traces=[TraceListItem(**t) for t in data.get("traces", [])],
+            next_cursor=data.get("next_cursor"),
+        )
 
     async def log_tool_call(
         self,

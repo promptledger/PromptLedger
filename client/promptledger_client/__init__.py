@@ -19,6 +19,7 @@ from .client import PromptLedgerClient
 from .exceptions import AuthError, NotFoundError, PromptLedgerError
 from .execution import ExecutionResult, ExecutionTelemetry
 from .models import RegisterResult, RegistrationPayload, SpanPayload, TraceSummary
+from .trace_models import TraceListItem, TraceSummaryPage
 
 __version__ = "0.1.0"
 
@@ -29,6 +30,8 @@ __all__ = [
     "RegistrationPayload",
     "RegisterResult",
     "TraceSummary",
+    "TraceListItem",
+    "TraceSummaryPage",
     "PromptLedgerError",
     "AuthError",
     "NotFoundError",
