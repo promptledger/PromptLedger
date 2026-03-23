@@ -235,9 +235,11 @@ class ExecutionService:
     ) -> tuple[Prompt, PromptVersion, Model]:
         """Resolve prompt, version, and model from request."""
 
+        DEFAULT_MODEL_NAME = "claude-sonnet-4-6"
+
         prompt_name = request["prompt_name"]
         version_number = request.get("version_number")
-        model_config = request["model"]
+        model_field = request.get("model")
 
         # Find prompt
         result = await self.db.execute(select(Prompt).where(Prompt.name == prompt_name))
@@ -266,18 +268,29 @@ class ExecutionService:
         if not version:
             raise ValueError("Prompt version not found")
 
-        # Find model
-        result = await self.db.execute(
-            select(Model).where(
-                Model.provider == model_config["provider"],
-                Model.model_name == model_config["model_name"],
+        # Resolve model — accept dict, plain string, or absent (default)
+        if isinstance(model_field, dict):
+            # Existing form: {"provider": "...", "model_name": "..."}
+            result = await self.db.execute(
+                select(Model).where(
+                    Model.provider == model_field["provider"],
+                    Model.model_name == model_field["model_name"],
+                )
             )
-        )
+            model_label = f"{model_field['provider']}/{model_field['model_name']}"
+        else:
+            # String model name, or absent → use string or fall back to default
+            model_name_lookup = (
+                model_field if isinstance(model_field, str) else DEFAULT_MODEL_NAME
+            )
+            result = await self.db.execute(
+                select(Model).where(Model.model_name == model_name_lookup)
+            )
+            model_label = model_name_lookup
+
         model = result.scalar_one_or_none()
         if not model:
-            raise ValueError(
-                f"Model '{model_config['provider']}/{model_config['model_name']}' not found"
-            )
+            raise ValueError(f"Model '{model_label}' not found")
 
         return prompt, version, model
 
